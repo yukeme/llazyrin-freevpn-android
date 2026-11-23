@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Middle emerald glow ring -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#00000000" />
+            <stroke
+                android:width="2dp"
+                android:color="#2878C25D" />
+        </shape>
+    </item>
+    <!-- Soft dashed emerald orbital track -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#00000000" />
+            <stroke
+                android:width="1.5dp"
+                android:color="#8C78C25D"
+                android:dashGap="6dp"
+                android:dashWidth="8dp" />
+        </shape>
+    </item>
+</layer-list>

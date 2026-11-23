@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notifRoot"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="top"
+    android:paddingStart="14dp"
+    android:paddingEnd="14dp"
+    android:paddingTop="12dp"
+    android:paddingBottom="12dp"
+    android:background="#16181D">
+
+    <!-- Left App Icon with dark logo -->
+    <ImageView
+        android:id="@+id/notifAppIcon"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_marginEnd="14dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_launcher"
+        android:contentDescription="@null" />
+
+    <!-- Right Content Column -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <!-- Header / App Title -->
+        <TextView
+            android:id="@+id/notifAppTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="llazyrinVPN"
+            android:textColor="#FFFFFF"
+            android:textSize="15.5sp"
+            android:textStyle="bold" />
+
+        <!-- Subtitle / Connection Status -->
+        <TextView
+            android:id="@+id/notifStatusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:text="Подключено • Варшава"
+            android:textColor="#94A3B8"
+            android:textSize="12sp" />
+
+        <!-- Traffic: Received -->
+        <TextView
+            android:id="@+id/notifTrafficRx"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Получено: 0,03 МБ"
+            android:textColor="#CBD5E1"
+            android:textSize="12sp" />
+
+        <!-- Traffic: Transmitted -->
+        <TextView
+            android:id="@+id/notifTrafficTx"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:text="Передано: 0,10 МБ"
+            android:textColor="#CBD5E1"
+            android:textSize="12sp" />
+
+        <!-- Action Button: Graphite Pill -->
+        <Button
+            android:id="@+id/notifBtnAction"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_notif_pill_btn"
+            android:gravity="center"
+            android:paddingStart="18dp"
+            android:paddingEnd="18dp"
+            android:paddingTop="0dp"
+            android:paddingBottom="0dp"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:text="Отключить"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+</LinearLayout>

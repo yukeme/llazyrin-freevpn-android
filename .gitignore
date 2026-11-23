@@ -1,0 +1,28 @@
+# Android Build & Artifacts
+build/
+bin/
+gen/
+dist/
+*.dex
+*.apk
+*.ap_
+*.class
+*.jar.dex
+
+# Keystores & Private Signing Credentials
+*.jks
+*.keystore
+*.p12
+*.key
+signing.properties
+keystore/
+
+# Local configuration
+local.properties
+.gradle/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">llazyrinVPN</string>
+    <string name="app_subtitle">Резервный защищенный канал</string>
+
+    <!-- Statuses -->
+    <string name="status_not_connected">ОТКЛЮЧЕНО</string>
+    <string name="status_connecting">ПОДКЛЮЧЕНИЕ…</string>
+    <string name="status_protected">ЗАЩИЩЕНО (VLESS REALITY)</string>
+    <string name="status_protected_vip">⚡ VIP ТУРБО • ЗАЩИЩЕНО</string>
+
+    <!-- Reference Redesign Home & Nav -->
+    <string name="nav_home">ГЛАВНАЯ</string>
+    <string name="nav_stats">СТАТИСТИКА</string>
+    <string name="nav_settings">НАСТРОЙКИ</string>
+    <string name="timer_label">ВРЕМЯ СЕССИИ</string>
+    <string name="metric_ping">пинг</string>
+    <string name="metric_spent">потрачено</string>
+    <string name="power_state_off">Выключен</string>
+    <string name="power_state_on">Включен</string>
+    <string name="power_state_connecting">Подключение…</string>
+    <string name="btn_refresh_servers_upper">ОБНОВИТЬ СПИСОК СЕРВЕРОВ</string>
+    <string name="default_timer">00:00:00</string>
+    <string name="default_country">Германия</string>
+    <string name="default_ping">70 мс</string>
+
+    <!-- Settings Tab -->
+    <string name="settings_header_upper">НАСТРОЙКИ</string>
+    <string name="settings_label_id">ID</string>
+    <string name="settings_label_key">Ключ</string>
+    <string name="settings_row_tunnel">Настройки туннеля</string>
+    <string name="settings_row_tunnel_default">DNS 1.1.1.1 • РФ напрямую</string>
+    <string name="settings_row_routing">Прокси для приложений</string>
+    <string name="settings_row_routing_default">ВЫКЛ • Все приложения</string>
+    <string name="settings_row_logs">Отправка диагностических логов</string>
+    <string name="settings_row_logs_default">Управляется сервером телеметрии</string>
+    <string name="settings_row_vip" formatted="false">VIP Turbo Boost (+50%)</string>
+    <string name="settings_row_reserve">Анти-глушилка (Резерв)</string>
+    <string name="settings_row_telegram">Telegram-канал</string>
+    <string name="settings_row_access_key">Получить ключ доступа</string>
+    <string name="settings_row_privacy">Конфиденциальность и правила</string>
+    <string name="settings_btn_reset">Выйти из аккаунта / Сброс</string>
+
+    <!-- Tunnel Settings Modal -->
+    <string name="tunnel_title_upper">НАСТРОЙКИ ТУННЕЛЯ</string>
+    <string name="tunnel_support">Поддержка</string>
+    <string name="notification_journal_title">Журнал уведомлений</string>
+    <string name="tunnel_tab_rules">Правила</string>
+    <string name="tunnel_tab_domains">Домены</string>
+    <string name="tunnel_tab_geofiles">Geoflags</string>
+    <string name="tunnel_rules_desc">Отмеченные ниже сервисы будут работать напрямую, минуя VPN. Остальной трафик — через VPN.</string>
+    <string name="tunnel_section_presets">Готовые сценарии</string>
+    <string name="tunnel_preset_ru_title">Российский трафик напрямую</string>
+    <string name="tunnel_preset_ru_desc">Банки, Госуслуги и РФ-сайты мимо VPN</string>
+    <string name="tunnel_preset_popular_title">Популярные сервисы через VPN</string>
+    <string name="tunnel_preset_popular_desc">YouTube, Instagram, Discord — через VPN</string>
+    <string name="tunnel_section_security_dns">Защита и DNS</string>
+    <string name="tunnel_section_countries">СТРАНЫ</string>
+    <string name="tunnel_domains_desc">Добавьте домены, которые будут открываться напрямую или через VPN</string>
+    <string name="tunnel_domain_hint">example.com</string>
+    <string name="tunnel_georules_title">Гео-правила</string>
+    <string name="tunnel_georules_desc">Добавьте категории из гео-файлов для маршрутизации (например geoip:ru, geosite:ru)</string>
+    <string name="tunnel_georule_hint">geoip:ru</string>
+    <string name="tunnel_geofiles_title">Гео-файлы</string>
+    <string name="tunnel_geofiles_names">geoip.dat • geosite.dat</string>
+    <string name="tunnel_geofiles_desc">Локальные базы маршрутизации по странам и сервисам</string>
+    <string name="tunnel_btn_apply">Применить</string>
+
+    <!-- Buttons -->
+    <string name="btn_connect">ПОДКЛЮЧИТЬСЯ</string>
+    <string name="btn_disconnect">ОТКЛЮЧИТЬ</string>
+    <string name="btn_select_location">Выбрать локацию</string>
+    <string name="btn_refresh_servers">Обновить список</string>
+    <string name="btn_apply_reconnect">Переподключить сейчас</string>
+    <string name="btn_close">Готово</string>
+
+    <!-- Location -->
+    <string name="auto_select_title">⚡ Быстрый автовыбор</string>
+    <string name="auto_select_desc">Подключение к серверу с наименьшим пингом</string>
+    <string name="location_selected">Выбранная локация</string>
+
+    <!-- Settings & DNS Dialog -->
+    <string name="settings_title">Настройки</string>
+    <string name="settings_subtitle">Безопасность и DNS-маршрутизация</string>
+    <string name="settings_section_security">БЕЗОПАСНОСТЬ И АВТОМАТИЗАЦИЯ</string>
+    <string name="pref_kill_switch_title">Аварийная блокировка (Kill Switch)</string>
+    <string name="pref_kill_switch_badge">БЛОКИРОВКА</string>
+    <string name="pref_kill_switch_desc">Блокировать интернет-трафик при внезапном разрыве туннеля VPN</string>
+    <string name="pref_auto_connect_title">Автоподключение при запуске</string>
+    <string name="pref_auto_connect_badge">АВТО</string>
+    <string name="pref_auto_connect_desc">Автоматически поднимать VPN сразу при открытии приложения</string>
+    <string name="settings_section_dns">ВЫБОР БЕЗОПАСНОГО DNS</string>
+    <string name="dns_selector_desc">Направляет DNS-запросы через защищенный шифрованный резолвер</string>
+    <string name="dns_cloudflare_title">Cloudflare 1.1.1.1</string>
+    <string name="dns_cloudflare_servers">1.1.1.1 • 1.0.0.1</string>
+    <string name="dns_cloudflare_desc">Быстрейший публичный резолвер с нулевым логированием</string>
+    <string name="dns_google_title">Google Public DNS</string>
+    <string name="dns_google_servers">8.8.8.8 • 8.8.4.4</string>
+    <string name="dns_google_desc">Надежный глобальный DNS от Google с гео-оптимизацией</string>
+    <string name="dns_adguard_title">AdGuard DNS</string>
+    <string name="dns_adguard_desc">Автоматическая фильтрация рекламы, трекеров и вредоносных сайтов</string>
+    <string name="reconnect_hint">Для применения нового DNS требуется переподключение туннеля</string>
+
+    <!-- Modern Monetization / VIP Turbo Boost -->
+    <string name="vip_pill_inactive" formatted="false">⚡ Ускорить (+50% скорости)</string>
+    <string name="vip_pill_active">⚡ VIP ТУРБО: %1$s</string>
+    <string name="vip_boost_title">VIP Turbo Boost</string>
+    <string name="vip_boost_subtitle" formatted="false">Резервный канал +50% скорости</string>
+    <string name="vip_boost_desc">Активируйте резервный высокоскоростной шлюз с повышенной пропускной способностью и минимальным пингом без очередей.</string>
+    <string name="vip_feature_speed" formatted="false">⚡ Скорость +50% (выделенная полоса 1 Гбит/с)</string>
+    <string name="vip_feature_ping" formatted="false">🛡️ Оптимизированный маршрут (пинг до -40%)</string>
+    <string name="vip_feature_servers">🚀 Доступ ко всем резервным VIP Reality-локациям</string>
+    <string name="vip_status_inactive">Статус: Базовый канал (стандартная скорость)</string>
+    <string name="vip_status_active">Статус: ⚡ АКТИВЕН (осталось: %1$s)</string>
+    <string name="vip_btn_activate">⚡ Активировать на 2 часа (Смотреть ролик)</string>
+    <string name="vip_btn_extend">⚡ Продлить еще на 2 часа (Смотреть ролик)</string>
+    <string name="vip_btn_dismiss">Закрыть (Обычная скорость)</string>
+    <string name="vip_activated_toast" formatted="false">🎉 VIP Turbo Boost (+50% скорости) успешно активирован на 2 часа!</string>
+
+    <!-- Rewarded Ad Simulator / Yandex Ready -->
+    <string name="ad_badge_text">СПОНСОРСКИЙ РОЛИК</string>
+    <string name="ad_dialog_title">⚡ Активация VIP Turbo Boost</string>
+    <string name="ad_dialog_desc">Смотрим короткий спонсорский ролик для активации резервного высокоскоростного канала.</string>
+    <string name="ad_watching">Просмотр ролика спонсора…</string>
+    <string name="ad_simulated_btn">Забрать награду (+2 часа VIP)</string>
+    <string name="ad_btn_skip">✕ Пропустить</string>
+    <string name="ad_reward_ready">✓ Просмотр завершен! Награда готова.</string>
+
+    <!-- Notification -->
+    <string name="vpn_notification_title">llazyrinVPN активен</string>
+    <string name="vpn_notification_connected">Защищенный туннель поднят к %1$s</string>
+    <string name="vpn_notification_vip">⚡ VIP Turbo Boost активен • %1$s</string>
+    <string name="vpn_action_disconnect">Отключить</string>
+</resources>

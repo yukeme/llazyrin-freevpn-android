@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#40FFFFFF">
+    <item>
+        <layer-list>
+            <!-- Glowing Gold Halo -->
+            <item>
+                <shape android:shape="rectangle">
+                    <corners android:radius="20dp" />
+                    <solid android:color="#00000000" />
+                    <stroke
+                        android:width="3dp"
+                        android:color="#4DE3B341" />
+                </shape>
+            </item>
+
+            <!-- Active Cyber Gold Core -->
+            <item
+                android:bottom="1dp"
+                android:left="1dp"
+                android:right="1dp"
+                android:top="1dp">
+                <shape android:shape="rectangle">
+                    <corners android:radius="19dp" />
+                    <gradient
+                        android:angle="270"
+                        android:startColor="#F033250E"
+                        android:centerColor="#E6261A08"
+                        android:endColor="#F2181105"
+                        android:type="linear" />
+                    <stroke
+                        android:width="1.8dp"
+                        android:color="#FFD56B" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+</ripple>

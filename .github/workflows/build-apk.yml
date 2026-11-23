@@ -1,0 +1,43 @@
+name: Build & Verify APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Verify Project Tree
+        run: |
+          echo "Verifying project structure..."
+          ls -la
+          test -f AndroidManifest.xml
+          test -d src
+          test -d res
+          echo "Project structure verified successfully."
+
+      - name: Generate Source Checksums
+        run: |
+          mkdir -p dist
+          find src res -type f -exec sha256sum {} + | sort > dist/sources_sha256.txt
+          head -n 20 dist/sources_sha256.txt
+
+      - name: Upload Source Verification Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-verification
+          path: dist/sources_sha256.txt

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Ambient Blur Shadow Layer -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#80000000" />
+            <corners android:radius="999dp" />
+        </shape>
+    </item>
+    <!-- Floating Glassmorphic Pill -->
+    <item
+        android:bottom="0.5dp"
+        android:left="0.5dp"
+        android:right="0.5dp"
+        android:top="0.5dp">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:startColor="#F0242A32"
+                android:centerColor="#EB1B2026"
+                android:endColor="#F814171D" />
+            <stroke
+                android:width="1.2dp"
+                android:color="#424D5C" />
+            <corners android:radius="999dp" />
+        </shape>
+    </item>
+</layer-list>

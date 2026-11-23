@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#40FFFFFF">
+    <item>
+        <layer-list>
+            <!-- Layer 0: Outermost Radiation Plasma Halo -->
+            <item>
+                <shape android:shape="oval">
+                    <solid android:color="#00000000" />
+                    <stroke
+                        android:width="6dp"
+                        android:color="#5500FF87" />
+                </shape>
+            </item>
+
+            <!-- Layer 1: 3D Quantum Emerald Core -->
+            <item
+                android:bottom="2dp"
+                android:left="2dp"
+                android:right="2dp"
+                android:top="2dp">
+                <shape android:shape="oval">
+                    <gradient
+                        android:angle="270"
+                        android:startColor="#6EFEB9"
+                        android:centerColor="#00E676"
+                        android:endColor="#026330"
+                        android:type="linear" />
+                    <stroke
+                        android:width="2.5dp"
+                        android:color="#E6FFFFFF" />
+                </shape>
+            </item>
+
+            <!-- Layer 2: Inner Specular Glass Arc Highlight -->
+            <item
+                android:bottom="8dp"
+                android:left="8dp"
+                android:right="8dp"
+                android:top="8dp">
+                <shape android:shape="oval">
+                    <gradient
+                        android:angle="270"
+                        android:startColor="#40FFFFFF"
+                        android:centerColor="#05FFFFFF"
+                        android:endColor="#00000000"
+                        android:type="linear" />
+                    <stroke
+                        android:width="1.2dp"
+                        android:color="#50FFFFFF" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+</ripple>

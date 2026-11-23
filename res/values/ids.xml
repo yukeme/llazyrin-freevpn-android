@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="btnSettings" type="id" />
+    <item name="scrollHomeContent" type="id" />
+    <item name="viewDialogScrim" type="id" />
+</resources>

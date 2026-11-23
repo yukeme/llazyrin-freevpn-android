@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Ambient emerald aura -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#1478C25D" />
+            <stroke
+                android:width="2.5dp"
+                android:color="#4078C25D" />
+        </shape>
+    </item>
+    <!-- Crisp inner emerald ring -->
+    <item
+        android:bottom="3dp"
+        android:left="3dp"
+        android:right="3dp"
+        android:top="3dp">
+        <shape android:shape="oval">
+            <solid android:color="#00000000" />
+            <stroke
+                android:width="1.6dp"
+                android:color="#C094DC78" />
+        </shape>
+    </item>
+</layer-list>

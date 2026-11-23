@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material Design 3 Spec Tokens from vpn-redesign-m3/index.html (Glassmorphism) -->
+    <color name="m3_bg">#0D1117</color>
+    <color name="m3_surface">#D90A0F0C</color>
+    <color name="m3_card">#C8111913</color>
+    <color name="m3_card_stroke">#73FFFFFF</color>
+    <color name="m3_divider">#33FFFFFF</color>
+    <color name="m3_emerald">#10B981</color>
+    <color name="m3_emerald_light">#34D399</color>
+    <color name="m3_emerald_pill_bg">#1A10B981</color>
+    <color name="m3_emerald_pill_stroke">#4010B981</color>
+    <color name="m3_warning">#FBBF24</color>
+    <color name="m3_warning_bg">#26FBBF24</color>
+    <color name="m3_warning_stroke">#40FBBF24</color>
+    <color name="m3_danger">#EF4444</color>
+    <color name="m3_sky">#38BDF8</color>
+    <color name="m3_sky_pill_bg">#1A38BDF8</color>
+    <color name="m3_sky_pill_stroke">#4038BDF8</color>
+    <color name="m3_slate_pill_bg">#1A64748B</color>
+    <color name="m3_slate_pill_stroke">#3364748B</color>
+    <color name="m3_text_white">#F8FAFC</color>
+    <color name="m3_text_secondary">#94A3B8</color>
+    <color name="m3_text_muted">#64748B</color>
+
+    <!-- Obsidian Forest Emerald Reference Palette -->
+    <color name="ref_bg_deep">#080C09</color>
+    <color name="ref_bg_canvas">#0B100C</color>
+    <color name="ref_bg_elevated">#101711</color>
+    <color name="ref_surface_card">#131B14</color>
+    <color name="ref_surface_card_translucent">#CC131B14</color>
+    <color name="ref_border_subtle">#263728</color>
+    <color name="ref_border_active">#559A41</color>
+    <color name="ref_divider">#1F2E21</color>
+
+    <color name="ref_emerald">#7AC45E</color>
+    <color name="ref_emerald_bright">#94DC78</color>
+    <color name="ref_emerald_deep">#4E8F38</color>
+    <color name="ref_emerald_title">#7EC461</color>
+    <color name="ref_emerald_dark_text">#0D190E</color>
+    <color name="ref_emerald_glow">#456AB852</color>
+
+    <color name="ref_text_primary">#F2F7F2</color>
+    <color name="ref_text_secondary">#8C9E8E</color>
+    <color name="ref_text_muted">#5A6B5C</color>
+    <color name="ref_text_tab_inactive">#B2C4B4</color>
+    <color name="ref_text_metric_label">#829484</color>
+
+    <color name="ref_dot_green">#5CD45B</color>
+    <color name="ref_dot_yellow">#E3B341</color>
+    <color name="ref_dot_red">#F85149</color>
+
+    <!-- Preserved Legacy Color Tokens (Harmonized to Obsidian Emerald) -->
+    <color name="bg_dark">#080C09</color>
+    <color name="bg_space_deep">#060907</color>
+    <color name="bg_space_elevated">#0E150F</color>
+    <color name="bg_header">#0B100C</color>
+    <color name="bg_surface">#111912</color>
+    <color name="bg_dialog_glass">#0B100C</color>
+    <color name="bg_dialog_sheet_dark">#080C09</color>
+    <color name="bg_card_glass">#131B14</color>
+    <color name="bg_card_glass_translucent">#CC131B14</color>
+    <color name="card_bg">#131B14</color>
+    <color name="card_bg_selected">#1B2D1C</color>
+    <color name="card_border">#263728</color>
+    <color name="card_border_glow">#407AC45E</color>
+    <color name="card_gold_border">#4E3D1F</color>
+
+    <!-- Emerald & Mint Accents -->
+    <color name="neon_mint">#7AC45E</color>
+    <color name="neon_mint_bright">#94DC78</color>
+    <color name="neon_mint_laser">#B2EB9B</color>
+    <color name="neon_mint_dark">#0D190E</color>
+    <color name="neon_mint_glow">#407AC45E</color>
+    <color name="neon_mint_ambient">#187AC45E</color>
+    <color name="neon_cyan">#62C8A5</color>
+    <color name="neon_cyan_glow">#3362C8A5</color>
+
+    <!-- Orbital Rings -->
+    <color name="neon_ring_1">#6BB552</color>
+    <color name="neon_ring_2">#7AC45E</color>
+    <color name="neon_ring_3">#94DC78</color>
+    <color name="neon_ring_glow">#357AC45E</color>
+
+    <!-- Status Pill Glassmorphism -->
+    <color name="pill_bg">#C8101A11</color>
+    <color name="pill_border">#335435</color>
+    <color name="pill_border_bright">#7AC45E</color>
+    <color name="pill_text_connected">#7AC45E</color>
+    <color name="pill_text_disconnected">#8C9E8E</color>
+    <color name="pill_text_connecting">#E3B341</color>
+
+    <!-- Real-time HUD Telemetry Card -->
+    <color name="stats_card_bg">#CC131B14</color>
+    <color name="stats_card_border">#263728</color>
+    <color name="stats_card_border_glow">#337AC45E</color>
+    <color name="stats_divider">#1F2E21</color>
+    <color name="stats_label">#829484</color>
+    <color name="stats_subtext">#5A6B5C</color>
+
+    <!-- Typography & Contrasts -->
+    <color name="text_primary">#F2F7F2</color>
+    <color name="text_secondary">#8C9E8E</color>
+    <color name="text_muted">#5A6B5C</color>
+    <color name="text_dark_icon">#0D190E</color>
+
+    <!-- Power Button -->
+    <color name="power_btn_start">#94DC78</color>
+    <color name="power_btn_mid">#7AC45E</color>
+    <color name="power_btn_end">#3C7A31</color>
+    <color name="power_btn_off_start">#202921</color>
+    <color name="power_btn_off_mid">#172018</color>
+    <color name="power_btn_off_end">#141B15</color>
+    <color name="power_btn_off_border">#2F3D31</color>
+    <color name="power_btn_off_rim">#7AC45E</color>
+    <color name="btn_power_off">#141B15</color>
+
+    <!-- Ping HUD -->
+    <color name="ping_badge_bg">#7AC45E</color>
+    <color name="ping_badge_text">#0D190E</color>
+    <color name="ping_glow">#447AC45E</color>
+    <color name="signal_bar_active">#7AC45E</color>
+    <color name="signal_bar_inactive">#233225</color>
+
+    <!-- Accents / Alert / Warnings -->
+    <color name="accent_green">#4E8F38</color>
+    <color name="accent_green_light">#7AC45E</color>
+    <color name="accent_green_glow">#407AC45E</color>
+    <color name="accent_gold">#E3B341</color>
+    <color name="accent_gold_bright">#F2C962</color>
+    <color name="accent_gold_laser">#FFE49E</color>
+    <color name="accent_warning">#E3B341</color>
+    <color name="accent_error">#F85149</color>
+
+    <!-- VIP Turbo Boost & Ads -->
+    <color name="ad_bg">#111912</color>
+    <color name="ad_badge">#E3B341</color>
+    <color name="ad_simulated_screen">#080C09</color>
+
+    <color name="vip_gold_bg">#D9191409</color>
+    <color name="vip_gold_bg_active">#E6291F0C</color>
+    <color name="vip_gold_border">#E3B341</color>
+    <color name="vip_gold_border_dim">#5C451A</color>
+    <color name="vip_gold_glow">#50E3B341</color>
+    <color name="vip_gold_text">#F2C962</color>
+    <color name="vip_btn_start">#FFE072</color>
+    <color name="vip_btn_end">#C98F14</color>
+    <color name="vip_btn_text">#120D04</color>
+</resources>

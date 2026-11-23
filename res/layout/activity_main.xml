@@ -1,0 +1,1611 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/m3_bg"
+    android:fitsSystemWindows="false">
+
+    <!-- Procedural Starfield & Soft Mossy Emerald Atmospheric Glow -->
+    <ru.llazyrin.goblinvpn.ui.StarfieldView
+        android:id="@+id/starfieldView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Ambient Dynamic Glow for Connected/Connecting states -->
+    <View
+        android:id="@+id/viewAmbientGlow"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:alpha="0.35"
+        android:background="@drawable/bg_ref_power_glow" />
+
+    <RelativeLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false">
+
+        <!-- Top Header Bar: 8dp Grid Aligned & Cutout/Inset Safe -->
+        <LinearLayout
+            android:id="@+id/headerBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:elevation="30dp"
+            android:orientation="vertical"
+            android:paddingStart="16dp"
+            android:paddingTop="44dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="8dp">
+
+            <!-- Content Row (h = 48dp) cleanly separated from top status padding -->
+            <RelativeLayout
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:clipChildren="false"
+                android:clipToPadding="false">
+
+                <!-- Left Info / Goblin Icon Button (38x38dp) -->
+                <FrameLayout
+                    android:id="@+id/btnGoblinBadge"
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:layout_alignParentStart="true"
+                    android:layout_centerVertical="true"
+                    android:background="@drawable/bg_m3_icon_btn"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <ImageView
+                        android:id="@+id/ivGoblinLogo"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@string/app_name"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_goblin_head" />
+                </FrameLayout>
+
+                <!-- Center M3 Security Status Pill (h = 32dp, Zero-Wrap Single Line) -->
+                <LinearLayout
+                    android:id="@+id/statusPill"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_centerInParent="true"
+                    android:background="@drawable/bg_m3_status_pill_off"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp">
+
+                    <View
+                        android:id="@+id/viewStatusDot"
+                        android:layout_width="8dp"
+                        android:layout_height="8dp"
+                        android:layout_marginEnd="6dp"
+                        android:background="@drawable/bg_status_dot_disconnected" />
+
+                    <TextView
+                        android:id="@+id/tvStatusText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:letterSpacing="0.06"
+                        android:text="ОТКЛЮЧЕНО"
+                        android:textColor="#758678"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text=" • "
+                        android:textColor="#64748B"
+                        android:textSize="10sp" />
+
+                    <TextView
+                        android:id="@+id/tvStatusIp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Не защищено"
+                        android:textColor="@color/m3_text_secondary"
+                        android:textSize="11sp"
+                        android:typeface="monospace" />
+                </LinearLayout>
+
+                <!-- Right Shield / Security Button (38x38dp) -->
+                <FrameLayout
+                    android:id="@+id/btnSupport"
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:layout_alignParentEnd="true"
+                    android:layout_centerVertical="true"
+                    android:background="@drawable/bg_m3_icon_btn"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:clipChildren="false"
+                    android:clipToPadding="false">
+
+                    <View
+                        android:id="@+id/badgeNotificationPulse"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/bg_notification_pulse_radar"
+                        android:visibility="gone" />
+
+                    <ImageView
+                        android:id="@+id/ivSupportIcon"
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@string/notification_journal_title"
+                        android:src="@drawable/ic_notification_journal" />
+                </FrameLayout>
+
+                <!-- Top Header Settings Title (Floating animated layer) -->
+                <TextView
+                    android:id="@+id/tvHeaderSettingsTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_centerVertical="true"
+                    android:letterSpacing="0.05"
+                    android:text="@string/settings_header_upper"
+                    android:textColor="#10B981"
+                    android:textSize="18.5sp"
+                    android:textStyle="bold"
+                    android:elevation="35dp"
+                    android:visibility="gone" />
+            </RelativeLayout>
+
+            <!-- Real-time Online Users Badge (Hidden per user request, background telemetry preserved) -->
+            <LinearLayout
+                android:id="@+id/badgeOnlineUsers"
+                android:layout_width="wrap_content"
+                android:layout_height="26dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_m3_badge_online"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:visibility="gone">
+
+                <View
+                    android:id="@+id/dotOnlineLive"
+                    android:layout_width="7dp"
+                    android:layout_height="7dp"
+                    android:layout_marginEnd="6dp"
+                    android:background="@drawable/bg_ref_dot_green" />
+
+                <TextView
+                    android:id="@+id/tvOnlineUsersCounter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:letterSpacing="0.04"
+                    android:text="🟢 ... онлайн"
+                    android:textColor="#34D399"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- TAB 1 CONTENT: HOME (Adaptive Scrollable Container for Compact Phones, Landscape & Tablets) -->
+        <ScrollView
+            android:id="@+id/scrollHomeContent"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_above="@+id/bottomNavDock"
+            android:layout_below="@id/headerBar"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:scrollbars="none">
+
+            <ru.llazyrin.goblinvpn.ui.AdaptiveContainer
+                android:id="@+id/layoutHomeContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingBottom="16dp">
+
+                <!-- 1. Session Timer Section -->
+                <TextView
+                    android:id="@+id/tvTimerLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:letterSpacing="0.14"
+                    android:text="@string/timer_label"
+                    android:textColor="#94A3B8"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvTimer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="0dp"
+                    android:letterSpacing="0.04"
+                    android:text="@string/default_timer"
+                    android:textColor="#FFFFFF"
+                    android:textSize="40sp"
+                    android:textStyle="bold"
+                    android:typeface="monospace" />
+
+                <!-- 2. Metrics Card: 8dp Grid Aligned & Responsive (w = match_parent with 16dp margins, h = 96dp) -->
+                <LinearLayout
+                    android:id="@+id/cardMetrics"
+                    android:layout_width="match_parent"
+                    android:layout_height="96dp"
+                    android:layout_marginStart="16dp"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginEnd="16dp"
+                    android:background="@drawable/bg_m3_metrics_card"
+                    android:orientation="horizontal">
+
+                <!-- Column 1: Ping (w = 176dp, padding = 12dp) -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical"
+                    android:orientation="vertical"
+                    android:padding="12dp">
+
+                    <!-- Row 1: Icon + "ПИНГ" on left, Badge on right -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:layout_width="15dp"
+                            android:layout_height="15dp"
+                            android:src="@drawable/ic_ping_bolt"
+                            android:tint="@color/m3_warning" />
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:letterSpacing="0.08"
+                            android:text="ПИНГ"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvPingBadge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_m3_badge_amber"
+                            android:paddingStart="5dp"
+                            android:paddingTop="1dp"
+                            android:paddingEnd="5dp"
+                            android:paddingBottom="1dp"
+                            android:text="СРЕДНИЙ"
+                            android:textColor="#FCD34D"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- Row 2: Value + unit (no overflow) -->
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:gravity="bottom"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/tvPing"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="301"
+                            android:textColor="@color/m3_warning"
+                            android:textSize="22sp"
+                            android:textStyle="bold"
+                            android:typeface="monospace" />
+
+                        <TextView
+                            android:id="@+id/tvPingUnit"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="3dp"
+                            android:layout_marginBottom="2dp"
+                            android:text="мс"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp"
+                            android:typeface="monospace" />
+                    </LinearLayout>
+
+                    <!-- Row 3: Subtext / Location -->
+                    <TextView
+                        android:id="@+id/tvPingSubtext"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="1dp"
+                        android:singleLine="true"
+                        android:text="Оптимальный"
+                        android:textColor="#94A3B8"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <!-- 1px Vertical Column Divider -->
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="match_parent"
+                    android:background="@color/m3_divider" />
+
+                <!-- Column 2: Traffic (w = 176dp, padding = 12dp) -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical"
+                    android:orientation="vertical"
+                    android:padding="12dp">
+
+                    <!-- Row 1: Icon + "ТРАФИК" on left, Badge on right -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:layout_width="15dp"
+                            android:layout_height="15dp"
+                            android:src="@drawable/ic_traffic_arrows"
+                            android:tint="@color/m3_emerald" />
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:letterSpacing="0.08"
+                            android:text="ТРАФИК"
+                            android:textColor="#94A3B8"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvTrafficBadge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_m3_badge_emerald"
+                            android:paddingStart="5dp"
+                            android:paddingTop="1dp"
+                            android:paddingEnd="5dp"
+                            android:paddingBottom="1dp"
+                            android:text="СЕССИЯ"
+                            android:textColor="#6EE7B7"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- Row 2: Value + unit (no overflow) -->
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:gravity="bottom"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/tvTotalTraffic"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0.0"
+                            android:textColor="#FFFFFF"
+                            android:textSize="22sp"
+                            android:textStyle="bold"
+                            android:typeface="monospace" />
+
+                        <TextView
+                            android:id="@+id/tvTrafficUnit"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="3dp"
+                            android:layout_marginBottom="2dp"
+                            android:text="МБ"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp"
+                            android:typeface="monospace" />
+                    </LinearLayout>
+
+                    <!-- Row 3: Subtext / Speeds -->
+                    <TextView
+                        android:id="@+id/tvTrafficSubtext"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="1dp"
+                        android:singleLine="true"
+                        android:text="↓ 0.0 / ↑ 0.0 МБ"
+                        android:textColor="#94A3B8"
+                        android:textSize="11sp"
+                        android:typeface="monospace" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- 3. Central Power Zone: Tactile Button (160dp) with Ripple Rings (232dp, 196dp) -->
+            <FrameLayout
+                android:id="@+id/powerButtonWrapper"
+                android:layout_width="240dp"
+                android:layout_height="wrap_content"
+                android:minHeight="240dp"
+                android:layout_gravity="center"
+                android:layout_weight="1"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"
+                android:clickable="false"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:focusable="false">
+
+                <!-- Outer animated ripple ring (232dp) -->
+                <View
+                    android:id="@+id/ringOuter"
+                    android:layout_width="232dp"
+                    android:layout_height="232dp"
+                    android:layout_gravity="center"
+                    android:background="@drawable/bg_m3_ripple_ring_1" />
+
+                <!-- Middle ripple ring (196dp) -->
+                <View
+                    android:id="@+id/ringMiddle"
+                    android:layout_width="196dp"
+                    android:layout_height="196dp"
+                    android:layout_gravity="center"
+                    android:background="@drawable/bg_m3_ripple_ring_2" />
+
+                <!-- Hidden compat ring -->
+                <View
+                    android:id="@+id/ringInner"
+                    android:layout_width="170dp"
+                    android:layout_height="170dp"
+                    android:layout_gravity="center"
+                    android:visibility="gone" />
+
+                <!-- Soft radial glow -->
+                <View
+                    android:id="@+id/viewPowerGlow"
+                    android:layout_width="200dp"
+                    android:layout_height="200dp"
+                    android:layout_gravity="center"
+                    android:alpha="0.25"
+                    android:background="@drawable/bg_ref_power_glow" />
+
+                <!-- Tactile Power Button (160 x 160 dp) -->
+                <FrameLayout
+                    android:id="@+id/btnPower"
+                    android:layout_width="160dp"
+                    android:layout_height="160dp"
+                    android:layout_gravity="center"
+                    android:background="@drawable/bg_m3_btn_connected"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <!-- Inner Bezel (146dp) -->
+                    <View
+                        android:id="@+id/viewPowerBezel"
+                        android:layout_width="146dp"
+                        android:layout_height="146dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/bg_m3_inner_bezel" />
+
+                    <!-- Icon and State Subtext -->
+                    <LinearLayout
+                        android:id="@+id/layoutPowerContent"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:orientation="vertical">
+
+                        <ImageView
+                            android:id="@+id/ivPowerIcon"
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:layout_gravity="center"
+                            android:contentDescription="@string/app_name"
+                            android:src="@drawable/ic_power_icon"
+                            android:tint="@color/m3_emerald" />
+
+                        <TextView
+                            android:id="@+id/tvPowerStatus"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:letterSpacing="0.12"
+                            android:text="ВКЛЮЧЕН"
+                            android:textColor="#34D399"
+                            android:textSize="10.5sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </FrameLayout>
+            </FrameLayout>
+
+            <!-- 4. Server Selector Card: 8dp Grid Aligned & Responsive (w = match_parent with 16dp margins, minHeight = 64dp) -->
+            <LinearLayout
+                android:id="@+id/cardServerSelector"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="64dp"
+                android:layout_marginStart="16dp"
+                android:layout_marginEnd="16dp"
+                android:layout_marginBottom="8dp"
+                android:background="@drawable/bg_m3_server_card"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="14dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="10dp">
+
+                <!-- Flag Box Squircle Tile (38 x 38 dp) -->
+                <FrameLayout
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_m3_flag_box">
+
+                    <TextView
+                        android:id="@+id/tvCardFlag"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:text="🇩🇪"
+                        android:textSize="18sp" />
+                </FrameLayout>
+
+                <!-- Server Info: 2 clean non-wrapping rows -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <!-- Row 1: Country Name + Badge (8dp grid aligned & non-wrapping) -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/tvCardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:singleLine="true"
+                            android:ellipsize="end"
+                            android:text="Автовыбор"
+                            android:textColor="#FFFFFF"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvCardBadge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:visibility="gone"
+                            android:background="@drawable/bg_m3_badge_emerald"
+                            android:paddingStart="6dp"
+                            android:paddingTop="2dp"
+                            android:paddingEnd="6dp"
+                            android:paddingBottom="2dp"
+                            android:text="ТОП"
+                            android:textColor="#6EE7B7"
+                            android:textSize="9sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- Row 2: City and Ping in single line -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/tvCardCity"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:singleLine="true"
+                            android:ellipsize="end"
+                            android:text="Оптимальный"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text=" • "
+                            android:textColor="#64748B"
+                            android:textSize="10sp" />
+
+                        <View
+                            android:id="@+id/viewCardPingDot"
+                            android:layout_width="6dp"
+                            android:layout_height="6dp"
+                            android:layout_marginEnd="4dp"
+                            android:background="@drawable/bg_ref_dot_yellow" />
+
+                        <TextView
+                            android:id="@+id/badgePing"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="301 мс"
+                            android:textColor="@color/m3_warning"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
+                            android:typeface="monospace" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Right Chevron (32x32dp) -->
+                <FrameLayout
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_m3_icon_btn">
+
+                    <ImageView
+                        android:id="@+id/ivCardArrow"
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@string/btn_select_location"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#94A3B8" />
+                </FrameLayout>
+            </LinearLayout>
+
+            <!-- Refresh Button Row: 8dp Grid Aligned & Responsive (w = match_parent with 16dp margins, h = 48dp) -->
+            <LinearLayout
+                android:id="@+id/btnRefreshServers"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginStart="16dp"
+                android:layout_marginEnd="16dp"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="16dp"
+                android:background="@drawable/bg_ref_refresh_btn"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:visibility="visible">
+
+                <TextView
+                    android:id="@+id/tvRefreshServers"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:letterSpacing="0.08"
+                    android:text="@string/btn_refresh_servers_upper"
+                    android:textColor="#10B981"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <ImageView
+                    android:id="@+id/ivRefreshIcon"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:layout_marginStart="8dp"
+                    android:contentDescription="@string/btn_refresh_servers"
+                    android:src="@drawable/ic_refresh"
+                    android:tint="#10B981" />
+            </LinearLayout>
+        </ru.llazyrin.goblinvpn.ui.AdaptiveContainer>
+    </ScrollView>
+
+        <!-- Settings Backdrop for Smooth Dim & Blur -->
+        <View
+            android:id="@+id/viewSettingsBackdrop"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_below="@id/headerBar"
+            android:background="#F0080C09"
+            android:alpha="0" />
+
+        <!-- TAB 2 CONTENT: SETTINGS (Full Original Settings Preserved) -->
+        <ScrollView
+            android:id="@+id/layoutSettingsContent"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_below="@id/headerBar"
+            android:layout_alignParentBottom="true"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:paddingBottom="100dp"
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <ru.llazyrin.goblinvpn.ui.AdaptiveContainer
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="vertical"
+                android:paddingStart="20dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="20dp"
+                android:paddingBottom="16dp">
+
+                <!-- Settings Header Title Placeholder -->
+                <View
+                    android:id="@+id/settingsTitlePlaceholder"
+                    android:layout_width="match_parent"
+                    android:layout_height="32dp"
+                    android:layout_marginBottom="16dp"
+                    android:visibility="invisible" />
+
+                <!-- Account / Key Info Card -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="14dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:id="@+id/rowClientId"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_label_id"
+                            android:textColor="#7F9182"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/tvClientId"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:gravity="end"
+                            android:maxLines="1"
+                            android:text="12345678901234567890"
+                            android:textColor="#EBF3EC"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginTop="12dp"
+                        android:layout_marginBottom="12dp"
+                        android:background="#33FFFFFF" />
+
+                    <LinearLayout
+                        android:id="@+id/rowSubKey"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_label_key"
+                            android:textColor="#7F9182"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/tvSubscriptionKey"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:gravity="end"
+                            android:maxLines="1"
+                            android:text="llazyrinReality-Active"
+                            android:textColor="#34D399"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginTop="12dp"
+                        android:layout_marginBottom="12dp"
+                        android:background="#22FFFFFF" />
+
+                    <!-- Step 3: Promo Code Row -->
+                    <LinearLayout
+                        android:id="@+id/rowPromoCode"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🎁 Промокод"
+                            android:textColor="#F2F7F2"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/tvPromoCodeBadge"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:gravity="end"
+                            android:text="Активировать ›"
+                            android:textColor="#34D399"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginTop="12dp"
+                        android:layout_marginBottom="12dp"
+                        android:background="#22FFFFFF" />
+
+                    <!-- Step 3: User Devices (3 Slots) Row -->
+                    <LinearLayout
+                        android:id="@+id/rowUserDevices"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📱 Мои устройства"
+                            android:textColor="#F2F7F2"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/tvUserDevicesBadge"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:gravity="end"
+                            android:text="3 слота ›"
+                            android:textColor="#34D399"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Row 1: Tunnel Settings -->
+                <LinearLayout
+                    android:id="@+id/rowTunnelSettings"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="58dp"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_row_tunnel"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp" />
+
+                        <TextView
+                            android:id="@+id/tvTunnelSummary"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="@string/settings_row_tunnel_default"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:layout_marginStart="8dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+                <!-- Row: Per-App Proxy (Split Tunneling) -->
+                <LinearLayout
+                    android:id="@+id/rowAppRouting"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="58dp"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_row_routing"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp" />
+
+                        <TextView
+                            android:id="@+id/tvAppRoutingSummary"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="@string/settings_row_routing_default"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:layout_marginStart="8dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+                <!-- Row: Auto Switch Server (Ping Guard Failover) -->
+                <LinearLayout
+                    android:id="@+id/rowAutoSwitchServer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="58dp"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Автопереключение серверов"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp" />
+
+                        <TextView
+                            android:id="@+id/tvAutoSwitchSummary"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="Смена узла при скачках пинга (>280 мс) или обрыве"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <!-- Custom Animated Toggle Switch (48dp x 26dp) -->
+                    <FrameLayout
+                        android:id="@+id/toggleAutoSwitchTrack"
+                        android:layout_width="48dp"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="12dp"
+                        android:background="@drawable/bg_toggle_track_off"
+                        android:clickable="false"
+                        android:focusable="false">
+
+                        <View
+                            android:id="@+id/toggleAutoSwitchThumb"
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:layout_gravity="center_vertical|start"
+                            android:layout_marginStart="3dp"
+                            android:background="@drawable/bg_toggle_thumb" />
+                    </FrameLayout>
+                </LinearLayout>
+
+                <!-- Row 2: VIP Turbo Boost -->
+                <LinearLayout
+                    android:id="@+id/rowVipBoost"
+                    android:layout_width="match_parent"
+                    android:layout_height="54dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_row_vip"
+                        android:textColor="#F2F7F2"
+                        android:textSize="14.5sp" />
+
+                    <TextView
+                        android:id="@+id/tvVipSettingsStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_marginEnd="6dp"
+                        android:text="Выкл"
+                        android:textColor="#E3B341"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+                <!-- Row 3: Anti-Jammer / Emergency Reserve -->
+                <LinearLayout
+                    android:id="@+id/rowEmergencyReserve"
+                    android:layout_width="match_parent"
+                    android:layout_height="54dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/settings_row_reserve"
+                        android:textColor="#F2F7F2"
+                        android:textSize="14.5sp" />
+
+                    <TextView
+                        android:id="@+id/tvReserveStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_marginEnd="6dp"
+                        android:text="Готов"
+                        android:textColor="#34D399"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+                <!-- Row: Remote Diagnostic Logging with Custom Animated Toggle -->
+                <LinearLayout
+                    android:id="@+id/rowAppLogs"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="64dp"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="12dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="12dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Анонимная диагностика"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvAppLogsSummary"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="3dp"
+                            android:lineSpacingExtra="2dp"
+                            android:text="Отключено • Логи не отправляются"
+                            android:textColor="#94A3B8"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <!-- Custom Animated Toggle Switch (48dp x 26dp) -->
+                    <FrameLayout
+                        android:id="@+id/toggleLoggingTrack"
+                        android:layout_width="48dp"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="12dp"
+                        android:background="@drawable/bg_toggle_track_off"
+                        android:clickable="false"
+                        android:focusable="false">
+
+                        <View
+                            android:id="@+id/toggleLoggingThumb"
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:layout_gravity="center_vertical|start"
+                            android:layout_marginStart="3dp"
+                            android:background="@drawable/bg_toggle_thumb" />
+                    </FrameLayout>
+                </LinearLayout>
+
+                <!-- Row: Share Best Configs with Community -->
+                <LinearLayout
+                    android:id="@+id/rowCommunityShare"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="64dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Делиться лучшим с сообществом"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp" />
+
+                        <TextView
+                            android:id="@+id/tvCommunityShareSummary"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="делиться лучшими конфигами с сообществами"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <!-- Custom Animated Toggle Switch (48dp x 26dp) -->
+                    <FrameLayout
+                        android:id="@+id/switchCommunityShareTrack"
+                        android:layout_width="48dp"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="12dp"
+                        android:background="@drawable/bg_toggle_track_off"
+                        android:clickable="false"
+                        android:focusable="false">
+
+                        <View
+                            android:id="@+id/switchCommunityShareThumb"
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:layout_gravity="center_vertical|start"
+                            android:layout_marginStart="3dp"
+                            android:background="@drawable/bg_toggle_thumb" />
+                    </FrameLayout>
+                </LinearLayout>
+
+                <!-- Row 4: Telegram Channel -->
+                <LinearLayout
+                    android:id="@+id/rowTelegramChannel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="58dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_row_telegram"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Официальный канал • @llazyrin"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+                <!-- Row 5: Get Access Key -->
+                <LinearLayout
+                    android:id="@+id/rowGetAccessKey"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="58dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:alpha="0.45"
+                    android:clickable="false"
+                    android:focusable="false"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_row_access_key"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Временно недоступно • Скоро в @llazyrin"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+                <!-- Row 6: Privacy Policy -->
+                <LinearLayout
+                    android:id="@+id/rowPrivacyPolicy"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="58dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Конфиденциальность и правила"
+                            android:textColor="#FFFFFF"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="No-Logs • Шифрование VLESS Reality • Правила"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+                <!-- Reset / Logout Button -->
+                <TextView
+                    android:id="@+id/btnResetSettings"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:padding="14dp"
+                    android:text="@string/settings_btn_reset"
+                    android:textColor="#7A8C7D"
+                    android:textSize="13sp" />
+
+                <!-- App Version & Build Footer -->
+                <TextView
+                    android:id="@+id/tvSettingsAppVersion"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="44dp"
+                    android:gravity="center"
+                    android:text="Версия 2.7.4 (Build 33)"
+                    android:textColor="#7A8C7D"
+                    android:textSize="12sp" />
+            </ru.llazyrin.goblinvpn.ui.AdaptiveContainer>
+        </ScrollView>
+
+        <!-- Bottom Nav Backdrop Scrim (Smooth gradient fading settings/content before dock) -->
+        <View
+            android:id="@+id/viewBottomNavScrim"
+            android:layout_width="match_parent"
+            android:layout_height="96dp"
+            android:layout_alignParentBottom="true"
+            android:background="@drawable/bg_bottom_nav_scrim"
+            android:clickable="false"
+            android:focusable="false" />
+
+        <!-- Floating Hotbar Glow / Ambient Shadow Underlay -->
+        <View
+            android:id="@+id/viewBottomNavDockGlow"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_alignParentBottom="true"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="24dp"
+            android:background="@drawable/bg_bottom_nav_dock_shadow"
+            android:clickable="false"
+            android:focusable="false" />
+
+        <!-- Floating Capsule Bottom Navigation Bar (Telegram-style Dock, 2-Tabs: Home & Settings) -->
+        <FrameLayout
+            android:id="@+id/bottomNavDock"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_alignParentBottom="true"
+            android:layout_marginStart="20dp"
+            android:layout_marginEnd="20dp"
+            android:layout_marginBottom="26dp"
+            android:background="@drawable/bg_m3_bottom_nav"
+            android:elevation="20dp"
+            android:paddingStart="4dp"
+            android:paddingTop="0dp"
+            android:paddingEnd="4dp"
+            android:paddingBottom="0dp">
+
+            <!-- Morphing Capsule Indicator behind active tab -->
+            <View
+                android:id="@+id/navMorphingCapsule"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_gravity="center_vertical|start"
+                android:layout_marginStart="3dp"
+                android:background="@drawable/bg_m3_nav_pill_active" />
+
+            <!-- Tabs Container -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <!-- Tab 1: Главная (Active) -->
+                <LinearLayout
+                    android:id="@+id/tabHome"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:id="@+id/viewPillHome"
+                        android:layout_width="match_parent"
+                        android:layout_height="38dp"
+                        android:layout_marginStart="3dp"
+                        android:layout_marginEnd="3dp"
+                        android:background="@android:color/transparent"
+                        android:gravity="center"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:id="@+id/ivTabHome"
+                            android:layout_width="19dp"
+                            android:layout_height="19dp"
+                            android:layout_marginEnd="8dp"
+                            android:contentDescription="@string/nav_home"
+                            android:src="@drawable/ic_nav_home"
+                            android:tint="@color/m3_emerald" />
+
+                        <TextView
+                            android:id="@+id/tvTabHome"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:letterSpacing="0.02"
+                            android:text="@string/nav_home"
+                            android:textColor="@color/m3_emerald"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Tab 2: Настройки -->
+                <LinearLayout
+                    android:id="@+id/tabSettings"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:id="@+id/viewPillSettings"
+                        android:layout_width="match_parent"
+                        android:layout_height="38dp"
+                        android:layout_marginStart="3dp"
+                        android:layout_marginEnd="3dp"
+                        android:background="@android:color/transparent"
+                        android:gravity="center"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:id="@+id/ivTabSettings"
+                            android:layout_width="19dp"
+                            android:layout_height="19dp"
+                            android:layout_marginEnd="8dp"
+                            android:contentDescription="@string/nav_settings"
+                            android:src="@drawable/ic_nav_settings"
+                            android:tint="#94A3B8" />
+
+                        <TextView
+                            android:id="@+id/tvTabSettings"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:letterSpacing="0.02"
+                            android:text="@string/nav_settings"
+                            android:textColor="#94A3B8"
+                            android:textSize="12.5sp" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- Full-Screen Dialog Scrim: Dims EVERYTHING including HeaderBar & Status Bar -->
+        <View
+            android:id="@+id/viewDialogScrim"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_alignParentTop="true"
+            android:layout_alignParentBottom="true"
+            android:layout_alignParentStart="true"
+            android:layout_alignParentEnd="true"
+            android:background="#F0080C09"
+            android:elevation="40dp"
+            android:alpha="0"
+            android:visibility="gone"
+            android:clickable="false"
+            android:focusable="false" />
+    </RelativeLayout>
+</FrameLayout>

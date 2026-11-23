@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Outer Neon Glow Border -->
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="14dp" />
+            <solid android:color="#00000000" />
+            <stroke
+                android:width="2dp"
+                android:color="#3300FF87" />
+        </shape>
+    </item>
+
+    <!-- Inner Dark Cyber Titanium Glass Body -->
+    <item
+        android:bottom="1.5dp"
+        android:left="1.5dp"
+        android:right="1.5dp"
+        android:top="1.5dp">
+        <shape android:shape="rectangle">
+            <corners android:radius="12.5dp" />
+            <gradient
+                android:angle="270"
+                android:startColor="#1A2536"
+                android:centerColor="#101824"
+                android:endColor="#0A0F17"
+                android:type="linear" />
+            <stroke
+                android:width="1.2dp"
+                android:color="#8000FF87" />
+        </shape>
+    </item>
+</layer-list>

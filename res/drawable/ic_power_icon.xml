@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Top vertical stem -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,3.2V11.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.0" />
+    <!-- Clean open circular ring with gap at top -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M17.66,6.34A8,8 0 1,1 6.34,6.34"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.0" />
+</vector>

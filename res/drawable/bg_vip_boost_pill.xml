@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#40FFD56B">
+    <item>
+        <layer-list>
+            <!-- Faint ambient gold glow -->
+            <item>
+                <shape android:shape="rectangle">
+                    <corners android:radius="20dp" />
+                    <solid android:color="#00000000" />
+                    <stroke
+                        android:width="2dp"
+                        android:color="#20E3B341" />
+                </shape>
+            </item>
+
+            <!-- Dark Cyber Gold Body -->
+            <item
+                android:bottom="1dp"
+                android:left="1dp"
+                android:right="1dp"
+                android:top="1dp">
+                <shape android:shape="rectangle">
+                    <corners android:radius="19dp" />
+                    <gradient
+                        android:angle="270"
+                        android:startColor="#F01E170A"
+                        android:centerColor="#E6151006"
+                        android:endColor="#F20D0A04"
+                        android:type="linear" />
+                    <stroke
+                        android:width="1.2dp"
+                        android:color="#80E3B341" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+</ripple>

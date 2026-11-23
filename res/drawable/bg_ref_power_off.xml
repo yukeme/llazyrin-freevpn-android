@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#257AC45E">
+    <item>
+        <layer-list>
+            <!-- Layer 1: Outer subtle rim -->
+            <item>
+                <shape android:shape="oval">
+                    <solid android:color="#0C140E" />
+                    <stroke
+                        android:width="1.5dp"
+                        android:color="#203323" />
+                </shape>
+            </item>
+
+            <!-- Layer 2: Inner matte dial -->
+            <item
+                android:bottom="4dp"
+                android:left="4dp"
+                android:right="4dp"
+                android:top="4dp">
+                <shape android:shape="oval">
+                    <solid android:color="#101912" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="#263828" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+</ripple>

@@ -10,18 +10,18 @@
 </p>
 
 <p align="center">
-  <a href="https://llazyrin.online"><img src="https://img.shields.io/badge/%D0%9E%D1%84%D0%B8%D1%86%D0%B8%D0%B0%D0%BB%D1%8C%D0%BD%D1%8B%D0%B9%20%D1%81%D0%B0%D0%B9%D1%82-llazyrin.online-10B981?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Official Website"></a>
-  <a href="https://finance.ozon.ru/apps/sbp/ozonbankpay/019ec4d3-e2db-744e-b502-5d4962db692e"><img src="https://img.shields.io/badge/%D0%9F%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D0%94%D0%BE%D0%BD%D0%B0%D1%82%20%D0%A1%D0%91%D0%9F-F59E0B?style=for-the-badge" alt="Donate via SBP"></a>
-  <a href="https://t.me/llazyrin"><img src="https://img.shields.io/badge/Telegram-@llazyrin-0088cc?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Channel"></a>
+  <a href="https://llazyrin.online"><img src=".github/badges/official_site.svg" alt="Official Website"></a>
+  <a href="https://finance.ozon.ru/apps/sbp/ozonbankpay/019ec4d3-e2db-744e-b502-5d4962db692e"><img src=".github/badges/donate_sbp.svg" alt="Donate via SBP"></a>
+  <a href="https://t.me/llazyrin"><img src=".github/badges/telegram.svg" alt="Telegram Channel"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android Version" />
-  <img src="https://img.shields.io/badge/VirusTotal-0%2F72%20Clean-brightgreen?style=flat-square&logo=virustotal&logoColor=white" alt="VirusTotal" />
-  <img src="https://img.shields.io/badge/Privacy-Zero--Logs-blue?style=flat-square" alt="Privacy" />
-  <img src="https://img.shields.io/badge/Trackers-0-success?style=flat-square" alt="Trackers" />
-  <img src="https://img.shields.io/badge/Encryption-TLS%201.3-purple?style=flat-square" alt="Encryption" />
-  <img src="https://img.shields.io/badge/License-GPL--3.0-lightgrey?style=flat-square" alt="License" />
+  <img src=".github/badges/android.svg" alt="Android Version" />
+  <img src=".github/badges/virustotal.svg" alt="VirusTotal" />
+  <img src=".github/badges/privacy.svg" alt="Privacy" />
+  <img src=".github/badges/trackers.svg" alt="Trackers" />
+  <img src=".github/badges/encryption.svg" alt="Encryption" />
+  <img src=".github/badges/license.svg" alt="License" />
 </p>
 
 ---
@@ -56,7 +56,7 @@
 
 <p align="center">
   <a href="https://finance.ozon.ru/apps/sbp/ozonbankpay/019ec4d3-e2db-744e-b502-5d4962db692e">
-    <img src="https://img.shields.io/badge/%D0%9F%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-%D0%94%D0%BE%D0%BD%D0%B0%D1%82%20%D0%A1%D0%91%D0%9F-F59E0B?style=for-the-badge" alt="Донат через СБП">
+    <img src=".github/badges/donate_sbp.svg" alt="Донат через СБП">
   </a>
 </p>
 

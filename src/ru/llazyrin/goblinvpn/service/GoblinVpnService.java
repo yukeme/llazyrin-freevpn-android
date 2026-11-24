@@ -30,6 +30,11 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import go.Seq;
@@ -97,6 +102,10 @@ public class GoblinVpnService extends VpnService {
 
     public static long getInitialTxBytes() {
         return initialUidTxBytes;
+    }
+
+    public static int getLastKnownPing() {
+        return lastKnownPing;
     }
 
     private final Runnable notifTrafficRunnable = new Runnable() {
@@ -342,9 +351,6 @@ public class GoblinVpnService extends VpnService {
 
         String action = intent.getAction();
         if (ACTION_CONNECT.equals(action)) {
-            try {
-                ru.llazyrin.goblinvpn.net.AutoSwitchEngine.getInstance(this).setUserDesiredConnected(true);
-            } catch (Throwable ignored) {}
             VpnServer server = null;
             try {
                 server = (VpnServer) intent.getSerializableExtra(EXTRA_SERVER);
@@ -354,9 +360,6 @@ public class GoblinVpnService extends VpnService {
             boolean restrictedTelegram = intent.getBooleanExtra(EXTRA_RESTRICTED_TELEGRAM_ONLY, false);
             connect(server, restrictedTelegram);
         } else if (ACTION_DISCONNECT.equals(action)) {
-            try {
-                ru.llazyrin.goblinvpn.net.AutoSwitchEngine.getInstance(this).setUserDesiredConnected(false);
-            } catch (Throwable ignored) {}
             disconnect();
         } else if (ACTION_RESTORE_NOTIFICATION.equals(action)) {
             if (currentState == VpnState.CONNECTED || currentState == VpnState.CONNECTING) {
@@ -385,12 +388,8 @@ public class GoblinVpnService extends VpnService {
         stopTunnel();
         activeSessionId.set(session);
         isExplicitUserDisconnect = false;
-        try {
-            NetworkPreferences.getInstance(this).setVpnDesiredActive(true);
-        } catch (Throwable ignored) {}
         this.isRestrictedTelegramOnly = restrictedTelegramOnly;
         acquireWakeLocks();
-
 
         currentServer = server;
         updateState(VpnState.CONNECTING);
@@ -495,50 +494,61 @@ public class GoblinVpnService extends VpnService {
                     }
 
                     // =========================================================================
-                    // FAST INITIAL HANDSHAKE WATCHDOG (Adaptive deadline: 3.5s cellular / 3.0s Wi-Fi)
-                    // Strict in-tunnel probe verification: eliminates false positives from rxDelta
+                    // FAST INITIAL HANDSHAKE WATCHDOG (Adaptive deadline: 9.0s cellular / 4.5s Wi-Fi)
+                    // Parallelized multi-target in-tunnel verification (Yandex, Telegram API, VK)
                     // =========================================================================
                     boolean handshakeOk = false;
                     final long watchdogStartMs = SystemClock.elapsedRealtime();
                     final boolean isCellular = WhitelistPoolManager.isRunningOnCellular(GoblinVpnService.this);
-                    final long watchdogDeadlineMs = isCellular ? 3500L : 3000L;
+                    final long watchdogDeadlineMs = isCellular ? 9000L : 3500L;
 
                     AppLogger.i(TAG, "Starting Initial Handshake Watchdog (" + watchdogDeadlineMs + "ms deadline, cellular="
-                            + isCellular + ") on node " + (server != null ? server.getDisplayName() : "unknown"));
+                            + isCellular + ") on node " + (server != null ? server.getDisplayName() + " [" + server.getHost() + ":" + server.getPort()
+                            + "] (SNI=" + server.getSni() + ", Tier=" + server.getMobileTier() + ")" : "unknown"));
 
-                    final java.util.concurrent.atomic.AtomicInteger probeDelay = new java.util.concurrent.atomic.AtomicInteger(-1);
+                    final AtomicInteger probeDelay = new AtomicInteger(-1);
+                    final AtomicBoolean probeConfirmed = new AtomicBoolean(false);
+                    final AtomicBoolean globalEgressConfirmed = new AtomicBoolean(false);
 
-                    // 1. Parallel probing across multiple HTTPS/HTTP endpoints directly through active tunnel
-                    final String[] targetProbeUrls = new String[]{
-                            "https://cp.cloudflare.com/generate_204",
-                            "https://www.gstatic.com/generate_204",
-                            "https://api.telegram.org",
-                            ServerPinger.HTTP_204_CLOUDFLARE,
+                    final ExecutorService probeExecutor = Executors.newFixedThreadPool(3);
+                    final String[] cellularTargets = new String[]{
+                            ServerPinger.TELEGRAM_API_URL,
                             ServerPinger.HTTP_204_GSTATIC,
-                            "http://cp.cloudflare.com/generate_204"
+                            ServerPinger.HTTP_204_CLOUDFLARE
                     };
+                    final String[] wifiTargets = new String[]{
+                            ServerPinger.HTTP_204_GSTATIC,
+                            ServerPinger.TELEGRAM_API_URL,
+                            ServerPinger.HTTP_204_CLOUDFLARE
+                    };
+                    final String[] targets = isCellular ? cellularTargets : wifiTargets;
 
-                    for (final String targetUrl : targetProbeUrls) {
-                        Thread pThread = new Thread(new Runnable() {
+                    for (final String targetUrl : targets) {
+                        probeExecutor.execute(new Runnable() {
                             @Override
                             public void run() {
-                                try {
-                                    int d = measureActiveTunnelDelay(targetUrl);
-                                    if (d > 0) {
-                                        probeDelay.compareAndSet(-1, d);
+                                if (!isRunning || activeSessionId.get() != session) {
+                                    return;
+                                }
+                                int d = measureActiveTunnelDelay(targetUrl);
+                                if (d > 0) {
+                                    AppLogger.i(TAG, "🔍 In-tunnel probe OK (" + targetUrl + "): " + d + "ms");
+                                    globalEgressConfirmed.set(true);
+                                    if (probeConfirmed.compareAndSet(false, true)) {
+                                        probeDelay.set(d);
                                     }
-                                } catch (Throwable ignored) {
+                                } else {
+                                    AppLogger.d(TAG, "🔍 In-tunnel probe FAILED (" + targetUrl + ")");
                                 }
                             }
-                        }, "HandshakeProbe-" + Math.abs(targetUrl.hashCode()));
-                        pThread.setDaemon(true);
-                        pThread.start();
+                        });
                     }
+                    probeExecutor.shutdown();
 
-                    // Strict polling loop: verifies ONLY when real in-tunnel probe delay > 0
+                    // Adaptive polling up to deadline (high frequency 80ms for instant handover)
                     while (isRunning && activeSessionId.get() == session && (SystemClock.elapsedRealtime() - watchdogStartMs < watchdogDeadlineMs)) {
                         try {
-                            Thread.sleep(150);
+                            Thread.sleep(80);
                         } catch (InterruptedException ie) {
                             break;
                         }
@@ -548,12 +558,10 @@ public class GoblinVpnService extends VpnService {
                             break;
                         }
 
-                        // Check: Probe responded with confirmed HTTP status
-                        int delay = probeDelay.get();
-                        if (delay > 0) {
+                        if ((probeConfirmed.get() || probeDelay.get() > 0) && (!isCellular || globalEgressConfirmed.get())) {
                             handshakeOk = true;
                             AppLogger.i(TAG, "✅ Initial Handshake VERIFIED in " + (SystemClock.elapsedRealtime() - watchdogStartMs)
-                                    + "ms! (probeDelay=" + delay + "ms)");
+                                    + "ms! (probeDelay=" + probeDelay.get() + "ms, globalEgress=" + globalEgressConfirmed.get() + ")");
                             break;
                         }
                     }
@@ -564,22 +572,31 @@ public class GoblinVpnService extends VpnService {
 
                     if (!handshakeOk) {
                         int finalDelay = probeDelay.get();
-                        if (finalDelay > 0) {
+                        if (finalDelay > 0 && (!isCellular || globalEgressConfirmed.get())) {
                             handshakeOk = true;
                         }
                     }
 
                     if (handshakeOk) {
-                        // Record proven working node on cellular network for instant Tier 1 recall
-                        if (isCellular && server != null) {
+                        // Record proven working node on cellular network ONLY if global egress (Telegram / Google) succeeded
+                        // Prevents Russian domestic intranet-only nodes (VK) from polluting the proven egress pool
+                        if (isCellular && server != null
+                                && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(server.getSni())
+                                && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileHost(server.getHost())
+                                && (globalEgressConfirmed.get() || !isDomesticOnlySni(server.getSni()))) {
                             ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage.getInstance(GoblinVpnService.this)
                                     .recordSuccess(server, probeDelay.get());
+                            ru.llazyrin.goblinvpn.net.WhitelistPoolManager.recordServerPing(server.getServerKey(), probeDelay.get());
+                        }
+                        if (server != null) {
+                            ru.llazyrin.goblinvpn.net.ServerPenaltyManager.getInstance(GoblinVpnService.this).recordSuccess(server.getServerKey());
                         }
                         AutoSwitchEngine.getInstance(GoblinVpnService.this).notifyHandshakeSucceeded(server);
                     } else {
                         initialHandshakeFailed = true;
                         AppLogger.w(TAG, "❌ Initial Handshake FAILED after " + watchdogDeadlineMs
-                                + "ms (in-tunnel probe returned -1). Triggering instant auto-failover!");
+                                + "ms (target=" + (server != null ? server.getHost() + ":" + server.getPort() + ", SNI=" + server.getSni() : "null")
+                                + ", cellular=" + isCellular + "). Triggering instant auto-failover!");
                         if (isCellular && server != null) {
                             ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage.getInstance(GoblinVpnService.this)
                                     .recordFailure(server.getServerKey());
@@ -643,7 +660,8 @@ public class GoblinVpnService extends VpnService {
         boolean killSwitch = prefs.isKillSwitchEnabled();
         NetworkPreferences.DnsOption dnsOption = prefs.getDnsOption();
 
-        int[] mtuCandidates = new int[] { 1500, 1400, 0 };
+        boolean isCellular = WhitelistPoolManager.isRunningOnCellular(this);
+        int[] mtuCandidates = isCellular ? new int[] { 1380, 1360, 0 } : new int[] { 1500, 1400, 0 };
 
         for (int mtu : mtuCandidates) {
             try {
@@ -655,10 +673,13 @@ public class GoblinVpnService extends VpnService {
                 // ROUTE ALL TRAFFIC INTO TUN INTERFACE
                 builder.addRoute("0.0.0.0", 0);
 
-                try {
-                    builder.addAddress("fdfe:dcba:9876::1", 126);
-                    builder.addRoute("::", 0);
-                } catch (Exception ignored) {}
+                // IPv6 Routing: Do NOT capture ::/0 on cellular networks (prevents Happy Eyeballs blackhole)
+                if (!isCellular) {
+                    try {
+                        builder.addAddress("fdfe:dcba:9876::1", 126);
+                        builder.addRoute("::", 0);
+                    } catch (Exception ignored) {}
+                }
 
                 // Per-App Proxy / Split Tunneling & Restricted Routing configuration
                 boolean restrictedMode = this.isRestrictedTelegramOnly || prefs.isRestrictedTelegramOnly();
@@ -670,8 +691,7 @@ public class GoblinVpnService extends VpnService {
                                 "org.telegram.messenger",
                                 "org.telegram.plus",
                                 "org.thunderdog.challegram",
-                                "org.telegram.messenger.web",
-                                getPackageName()
+                                "org.telegram.messenger.web"
                         };
                         int allowedTelegramCount = 0;
                         for (String pkg : telegramApps) {
@@ -682,6 +702,9 @@ public class GoblinVpnService extends VpnService {
                                 AppLogger.w(TAG, "Restricted Telegram-Only: package " + pkg + " not installed: " + e.getMessage());
                             }
                         }
+                        try {
+                            builder.addDisallowedApplication(getPackageName());
+                        } catch (Exception ignored) {}
                         AppLogger.i(TAG, "Restricted Telegram-Only mode configured for " + allowedTelegramCount + " packages.");
                     } else {
                         // Regular split tunneling configuration
@@ -703,11 +726,9 @@ public class GoblinVpnService extends VpnService {
                                     }
                                 }
                             }
-                            if (allowedCount == 0) {
-                                try {
-                                    builder.addDisallowedApplication(getPackageName());
-                                } catch (Exception ignored) {}
-                            }
+                            try {
+                                builder.addDisallowedApplication(getPackageName());
+                            } catch (Exception ignored) {}
                             AppLogger.i(TAG, "Per-App Proxy [ВКЛ]: туннель активен ТОЛЬКО для " + allowedCount + " выбранных приложений");
                         } else if (routingMode == NetworkPreferences.AppRoutingMode.BYPASS_SELECTED) {
                             // ОБХОД: Выбранные приложения обходят прокси и идут напрямую
@@ -820,9 +841,6 @@ public class GoblinVpnService extends VpnService {
     public void disconnect() {
         Log.i(TAG, "Disconnecting llazyrinVPN service asynchronously...");
         isExplicitUserDisconnect = true;
-        try {
-            NetworkPreferences.getInstance(this).setVpnDesiredActive(false);
-        } catch (Throwable ignored) {}
         activeSessionId.incrementAndGet();
         updateState(VpnState.DISCONNECTED);
         stopForegroundNotification();
@@ -1272,7 +1290,7 @@ public class GoblinVpnService extends VpnService {
         return notification;
     }
 
-    public void updateNotification(String text) {
+    private void updateNotification(String text) {
         try {
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) {
@@ -1281,5 +1299,11 @@ public class GoblinVpnService extends VpnService {
         } catch (Exception e) {
             Log.w(TAG, "Failed to update notification: " + e.getMessage(), e);
         }
+    }
+
+    private static boolean isDomesticOnlySni(String sni) {
+        if (sni == null || sni.trim().isEmpty()) return false;
+        String s = sni.trim().toLowerCase(Locale.ROOT);
+        return s.contains("wholebeam.com") || s.contains("vk.com") || s.contains("ok.ru") || s.contains("mail.ru");
     }
 }

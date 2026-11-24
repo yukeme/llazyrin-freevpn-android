@@ -58,6 +58,7 @@ public class MobileProvenConfigStorage {
         public String sni;
         public String security;
         public long lastSuccessMs;
+        public long lastFailureMs;
         public int successCount;
         public int consecutiveFailures;
         public int lastLatencyMs;
@@ -77,6 +78,7 @@ public class MobileProvenConfigStorage {
                 obj.put("sni", sni != null ? sni : "");
                 obj.put("security", security != null ? security : "reality");
                 obj.put("lastSuccessMs", lastSuccessMs);
+                obj.put("lastFailureMs", lastFailureMs);
                 obj.put("successCount", successCount);
                 obj.put("consecutiveFailures", consecutiveFailures);
                 obj.put("lastLatencyMs", lastLatencyMs);
@@ -99,10 +101,37 @@ public class MobileProvenConfigStorage {
             e.sni = obj.optString("sni", e.host);
             e.security = obj.optString("security", "reality");
             e.lastSuccessMs = obj.optLong("lastSuccessMs", 0L);
+            e.lastFailureMs = obj.optLong("lastFailureMs", 0L);
             e.successCount = obj.optInt("successCount", 1);
             e.consecutiveFailures = obj.optInt("consecutiveFailures", 0);
             e.lastLatencyMs = obj.optInt("lastLatencyMs", 50);
             return e;
+        }
+
+        public int getMaxConsecutiveFailures() {
+            if (successCount >= 10) return 8;
+            if (successCount >= 5) return 6;
+            if (successCount >= 2) return 4;
+            return 3;
+        }
+
+        public void decayFailuresIfNeeded(long now) {
+            if (consecutiveFailures > 0 && lastFailureMs > 0) {
+                long elapsed = now - lastFailureMs;
+                if (elapsed >= 150_000L) { // 2.5 minutes without failures
+                    int units = (int) (elapsed / 90_000L); // decay 1 failure per 1.5 min
+                    consecutiveFailures = Math.max(0, consecutiveFailures - units);
+                    if (consecutiveFailures == 0) {
+                        lastFailureMs = 0L;
+                    }
+                }
+            }
+        }
+
+        public boolean isCoolingDown(long now) {
+            if (lastFailureMs <= 0) return false;
+            long cooldownMs = (consecutiveFailures <= 1) ? 20_000L : 60_000L;
+            return (now - lastFailureMs) < cooldownMs;
         }
 
         public VpnServer toVpnServer() {
@@ -123,7 +152,7 @@ public class MobileProvenConfigStorage {
 
         public double calculateScore() {
             long ageHours = (System.currentTimeMillis() - lastSuccessMs) / (3600L * 1000L);
-            return (successCount * 500.0) - (consecutiveFailures * 400.0) - (lastLatencyMs * 0.5) - (ageHours * 10.0);
+            return (successCount * 300.0) - (consecutiveFailures * 120.0) - (lastLatencyMs * 0.3) - (ageHours * 5.0);
         }
     }
 
@@ -168,6 +197,12 @@ public class MobileProvenConfigStorage {
                         JSONObject obj = arr.getJSONObject(i);
                         ProvenEntry entry = ProvenEntry.fromJson(obj);
                         if (entry != null && entry.serverKey != null && !entry.serverKey.isEmpty()) {
+                            // Sanitization: Evict blocked SNIs and blocked Sweden host from proven stash
+                            if (ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(entry.sni)
+                                    || ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileHost(entry.host)) {
+                                AppLogger.w(TAG, "Evicting blocked mobile node from proven stash: " + entry.serverKey + " (sni=" + entry.sni + ")");
+                                continue;
+                            }
                             // Проверка устаревания (7 суток)
                             if (now - entry.lastSuccessMs <= MAX_AGE_MS) {
                                 entries.add(entry);
@@ -185,11 +220,28 @@ public class MobileProvenConfigStorage {
     /**
      * Фиксирует успешное подключение и подтвержденное рукопожатие на сотовой сети.
      */
+    public synchronized boolean isProven(String serverKey) {
+        if (serverKey == null || serverKey.isEmpty()) return false;
+        loadFromStash();
+        long now = System.currentTimeMillis();
+        for (ProvenEntry e : entries) {
+            if (e.serverKey.equalsIgnoreCase(serverKey)) {
+                e.decayFailuresIfNeeded(now);
+                if (e.consecutiveFailures < e.getMaxConsecutiveFailures()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public synchronized void recordSuccess(VpnServer server, int latencyMs) {
         if (server == null || server.getHost() == null || server.getHost().isEmpty()) {
             return;
         }
-        if (!ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isSniPermittedOnCellular(server.getSni())) {
+        if (ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(server.getSni())
+                || ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileHost(server.getHost())) {
+            AppLogger.w(TAG, "Refusing to record blocked mobile node to proven stash: " + server.getServerKey());
             return;
         }
 
@@ -207,6 +259,7 @@ public class MobileProvenConfigStorage {
         if (found != null) {
             found.successCount++;
             found.consecutiveFailures = 0;
+            found.lastFailureMs = 0L;
             found.lastSuccessMs = now;
             if (latencyMs > 0) {
                 found.lastLatencyMs = latencyMs;
@@ -226,6 +279,7 @@ public class MobileProvenConfigStorage {
             found.sni = server.getSni();
             found.security = server.getSecurity();
             found.lastSuccessMs = now;
+            found.lastFailureMs = 0L;
             found.successCount = 1;
             found.consecutiveFailures = 0;
             found.lastLatencyMs = latencyMs > 0 ? latencyMs : 50;
@@ -246,14 +300,18 @@ public class MobileProvenConfigStorage {
         if (serverKey == null || serverKey.isEmpty()) return;
 
         loadFromStash();
+        long now = System.currentTimeMillis();
         for (ProvenEntry e : entries) {
             if (e.serverKey.equalsIgnoreCase(serverKey)) {
+                e.decayFailuresIfNeeded(now);
                 e.consecutiveFailures++;
+                e.lastFailureMs = now;
+                int maxFails = e.getMaxConsecutiveFailures();
                 AppLogger.w(TAG, "⚠️ [MobileProven] Node failed on cellular: " + e.serverKey
-                        + " (fail #" + e.consecutiveFailures + ")");
-                if (e.consecutiveFailures >= 3) {
+                        + " (fail #" + e.consecutiveFailures + "/" + maxFails + ", successCount=" + e.successCount + ")");
+                if (e.consecutiveFailures >= maxFails) {
                     AppLogger.w(TAG, "🛑 [MobileProven] Node " + e.serverKey
-                            + " demoted due to 3 consecutive cellular failures.");
+                            + " temporarily demoted due to " + e.consecutiveFailures + " consecutive cellular failures.");
                 }
                 persistToStash();
                 break;
@@ -262,23 +320,8 @@ public class MobileProvenConfigStorage {
     }
 
     /**
-     * Проверяет, является ли сервер доказанно работающим на сотовой сети.
-     */
-    public synchronized boolean isProven(String serverKey) {
-        if (serverKey == null || serverKey.isEmpty()) return false;
-        loadFromStash();
-        long now = System.currentTimeMillis();
-        for (ProvenEntry e : entries) {
-            if (e != null && serverKey.equalsIgnoreCase(e.serverKey)) {
-                return (e.consecutiveFailures < 3 && (now - e.lastSuccessMs <= MAX_AGE_MS));
-            }
-        }
-        return false;
-    }
-
-    /**
      * Возвращает отсортированный список доказанно работавших на сотовой связи серверов.
-     * Отбраковывает узлы с 3+ сбоями подряд или старше 7 суток.
+     * Не допускает перманентного исключения при временных сбоях радиоканала.
      */
     public synchronized List<VpnServer> getProvenMobileServers() {
         loadFromStash();
@@ -288,21 +331,36 @@ public class MobileProvenConfigStorage {
 
         long now = System.currentTimeMillis();
         List<ProvenEntry> valid = new ArrayList<>();
+        List<ProvenEntry> coolingDown = new ArrayList<>();
+        List<ProvenEntry> highSuccessFallback = new ArrayList<>();
+
         for (ProvenEntry e : entries) {
-            // Tier 1 retains proven nodes with < 3 consecutive cellular failures and valid cellular SNI
-            if (e.consecutiveFailures < 3
-                    && (now - e.lastSuccessMs <= MAX_AGE_MS)
-                    && !MainActivity.isKnownDeadHost(e.host)
-                    && ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isSniPermittedOnCellular(e.sni)) {
-                valid.add(e);
+            if (e == null || e.host == null || e.host.isEmpty()) continue;
+            if (MainActivity.isKnownDeadHost(e.host)) continue;
+            if (ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileHost(e.host)) continue;
+            if (ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(e.sni)) continue;
+            if (now - e.lastSuccessMs > MAX_AGE_MS) continue;
+
+            e.decayFailuresIfNeeded(now);
+
+            if (e.consecutiveFailures < e.getMaxConsecutiveFailures()) {
+                if (!e.isCoolingDown(now)) {
+                    valid.add(e);
+                } else {
+                    coolingDown.add(e);
+                }
+            } else if (e.successCount >= 3) {
+                // Сервер многократно доказывал свою надежность (например 15 успехов) — не теряем его
+                highSuccessFallback.add(e);
             }
         }
 
-        if (valid.isEmpty()) {
+        List<ProvenEntry> target = !valid.isEmpty() ? valid : (!coolingDown.isEmpty() ? coolingDown : highSuccessFallback);
+        if (target.isEmpty()) {
             return Collections.emptyList();
         }
 
-        Collections.sort(valid, new Comparator<ProvenEntry>() {
+        Collections.sort(target, new Comparator<ProvenEntry>() {
             @Override
             public int compare(ProvenEntry a, ProvenEntry b) {
                 return Double.compare(b.calculateScore(), a.calculateScore());
@@ -310,13 +368,21 @@ public class MobileProvenConfigStorage {
         });
 
         List<VpnServer> result = new ArrayList<>();
-        for (ProvenEntry pe : valid) {
+        for (ProvenEntry pe : target) {
             result.add(pe.toVpnServer());
         }
 
         AppLogger.i(TAG, "Returned " + result.size() + " proven mobile servers (Top: "
-                + result.get(0).getDisplayName() + ")");
+                + result.get(0).getDisplayName() + ", mode=" + (!valid.isEmpty() ? "READY" : (!coolingDown.isEmpty() ? "COOLDOWN_FALLBACK" : "HISTORICAL_FALLBACK")) + ")");
         return result;
+    }
+
+    /**
+     * Возвращает топовый доказанно работавший сервер для моментального подключения на сотовой связи.
+     */
+    public synchronized VpnServer getBestProvenServer() {
+        List<VpnServer> list = getProvenMobileServers();
+        return (list != null && !list.isEmpty()) ? list.get(0) : null;
     }
 
     /**

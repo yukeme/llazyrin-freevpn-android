@@ -76,6 +76,7 @@ import ru.llazyrin.goblinvpn.net.ServerPinger;
 import ru.llazyrin.goblinvpn.net.VpnSubscriptionClient;
 import ru.llazyrin.goblinvpn.net.WhitelistPoolManager;
 import ru.llazyrin.goblinvpn.security.EmergencyConfigStorage;
+import ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage;
 import ru.llazyrin.goblinvpn.service.GoblinVpnService;
 import ru.llazyrin.goblinvpn.service.VpnState;
 import ru.llazyrin.goblinvpn.net.AppUpdateManager;
@@ -148,7 +149,6 @@ public class MainActivity extends Activity {
     private LinearLayout cardServerSelector;
     private TextView tvCardFlag;
     private TextView tvCardTitle;
-    private TextView tvCardBadge;
     private TextView tvCardCity;
     private View viewCardPingDot;
     private TextView badgePing;
@@ -172,10 +172,6 @@ public class MainActivity extends Activity {
     private TextView tvClientId;
     private LinearLayout rowSubKey;
     private TextView tvSubscriptionKey;
-    private LinearLayout rowPromoCode;
-    private TextView tvPromoCodeBadge;
-    private LinearLayout rowUserDevices;
-    private TextView tvUserDevicesBadge;
     private LinearLayout rowTunnelSettings;
     private TextView tvTunnelSummary;
     private LinearLayout rowAppRouting;
@@ -214,6 +210,8 @@ public class MainActivity extends Activity {
     // Bell Breathing Pulse Animator
     private ValueAnimator bellBreathingAnimator;
     private LinearLayout rowTelegramChannel;
+    private LinearLayout rowDonate;
+    private LinearLayout rowGitHub;
     private LinearLayout rowGetAccessKey;
     private LinearLayout rowPrivacyPolicy;
     private TextView btnResetSettings;
@@ -273,21 +271,6 @@ public class MainActivity extends Activity {
     private VpnState currentState = VpnState.DISCONNECTED;
     private boolean isWaveAnimating = false;
     private long lastAutoUpdateCheckMs = 0;
-
-    private final Handler periodicRefreshHandler = new Handler(Looper.getMainLooper());
-    private final Runnable periodicRefreshRunnable = new Runnable() {
-        @Override
-        public void run() {
-            try {
-                AppLogger.i("MainActivity", "⏰ Running periodic background server refresh & dead-node pruning...");
-                refreshServers(false);
-            } catch (Throwable t) {
-                Log.w("MainActivity", "Periodic refresh error: " + t.getMessage());
-            } finally {
-                periodicRefreshHandler.postDelayed(this, 25 * 60 * 1000L);
-            }
-        }
-    };
 
     private final Handler autoCheckHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoCheckRunnable = new Runnable() {
@@ -629,7 +612,6 @@ public class MainActivity extends Activity {
         cardServerSelector = findViewById(R.id.cardServerSelector);
         tvCardFlag = findViewById(R.id.tvCardFlag);
         tvCardTitle = findViewById(R.id.tvCardTitle);
-        tvCardBadge = findViewById(R.id.tvCardBadge);
         tvCardCity = findViewById(R.id.tvCardCity);
         viewCardPingDot = findViewById(R.id.viewCardPingDot);
         badgePing = findViewById(R.id.badgePing);
@@ -653,10 +635,6 @@ public class MainActivity extends Activity {
         tvClientId = findViewById(R.id.tvClientId);
         rowSubKey = findViewById(R.id.rowSubKey);
         tvSubscriptionKey = findViewById(R.id.tvSubscriptionKey);
-        rowPromoCode = findViewById(R.id.rowPromoCode);
-        tvPromoCodeBadge = findViewById(R.id.tvPromoCodeBadge);
-        rowUserDevices = findViewById(R.id.rowUserDevices);
-        tvUserDevicesBadge = findViewById(R.id.tvUserDevicesBadge);
         rowTunnelSettings = findViewById(R.id.rowTunnelSettings);
         tvTunnelSummary = findViewById(R.id.tvTunnelSummary);
         rowAppRouting = findViewById(R.id.rowAppRouting);
@@ -678,6 +656,8 @@ public class MainActivity extends Activity {
         switchCommunityShareThumb = findViewById(R.id.switchCommunityShareThumb);
         tvCommunityShareSummary = findViewById(R.id.tvCommunityShareSummary);
         rowTelegramChannel = findViewById(R.id.rowTelegramChannel);
+        rowDonate = findViewById(R.id.rowDonate);
+        rowGitHub = findViewById(R.id.rowGitHub);
         rowGetAccessKey = findViewById(R.id.rowGetAccessKey);
         rowPrivacyPolicy = findViewById(R.id.rowPrivacyPolicy);
         btnResetSettings = findViewById(R.id.btnResetSettings);
@@ -866,38 +846,6 @@ public class MainActivity extends Activity {
             });
         }
 
-        if (rowPromoCode != null) {
-            rowPromoCode.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    HapticFeedbackHelper.performButtonClick(v);
-                    showDialogScrim();
-                    ru.llazyrin.goblinvpn.ui.PromoCodeDialog.show(MainActivity.this, new Runnable() {
-                        @Override
-                        public void run() {
-                            hideDialogScrim();
-                        }
-                    });
-                }
-            });
-        }
-
-        if (rowUserDevices != null) {
-            rowUserDevices.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    HapticFeedbackHelper.performButtonClick(v);
-                    showDialogScrim();
-                    ru.llazyrin.goblinvpn.ui.DeviceManagerDialog.show(MainActivity.this, new Runnable() {
-                        @Override
-                        public void run() {
-                            hideDialogScrim();
-                        }
-                    });
-                }
-            });
-        }
-
         if (rowTunnelSettings != null) {
             rowTunnelSettings.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -1001,7 +949,27 @@ public class MainActivity extends Activity {
                 @Override
                 public void onClick(View v) {
                     HapticFeedbackHelper.performButtonClick(v);
-                    openTelegramUrl("https://t.me/llazyrin");
+                    ru.llazyrin.goblinvpn.security.SecureExternalLinks.openTelegram(MainActivity.this);
+                }
+            });
+        }
+
+        if (rowDonate != null) {
+            rowDonate.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    HapticFeedbackHelper.performButtonClick(v);
+                    ru.llazyrin.goblinvpn.security.SecureExternalLinks.openDonate(MainActivity.this);
+                }
+            });
+        }
+
+        if (rowGitHub != null) {
+            rowGitHub.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    HapticFeedbackHelper.performButtonClick(v);
+                    ru.llazyrin.goblinvpn.security.SecureExternalLinks.openGitHub(MainActivity.this);
                 }
             });
         }
@@ -1386,7 +1354,7 @@ public class MainActivity extends Activity {
 
         if (tvAutoSwitchSummary != null) {
             if (active) {
-                tvAutoSwitchSummary.setText("Активно • Смена узла при пинге >280 мс или обрыве");
+                tvAutoSwitchSummary.setText("Активно • Смена узла при обрыве или задержке");
                 tvAutoSwitchSummary.setTextColor(Color.parseColor("#34D399"));
             } else {
                 tvAutoSwitchSummary.setText("Отключено • Фиксированный узел подключения");
@@ -1648,8 +1616,6 @@ public class MainActivity extends Activity {
 
         currentState = GoblinVpnService.getCurrentState();
         isWaveAnimating = false;
-        periodicRefreshHandler.removeCallbacks(periodicRefreshRunnable);
-        periodicRefreshHandler.postDelayed(periodicRefreshRunnable, 25 * 60 * 1000L);
         AppUpdateManager.checkPendingInstall(this);
         if (AppUpdateManager.isAppBlocked() && AppUpdateManager.getBlockedUpdateInfo() != null) {
             AppUpdateManager.showForceUpdateDialog(this, AppUpdateManager.getBlockedUpdateInfo(), AppUpdateManager.getAppVersionName(this));
@@ -1760,7 +1726,6 @@ public class MainActivity extends Activity {
             activeServerDialog = null;
         }
         hideDialogScrim();
-        periodicRefreshHandler.removeCallbacks(periodicRefreshRunnable);
         stopLivePing();
         stopTelemetry();
         super.onDestroy();
@@ -1911,9 +1876,37 @@ public class MainActivity extends Activity {
                         }
 
                         isEmergencyReserveActive = isEmergencyMode;
-                        if (balancedServers != null && !balancedServers.isEmpty()) {
-                            serverList = balancedServers;
-                            AutoSwitchEngine.getInstance(MainActivity.this).setCandidateServers(balancedServers);
+                        List<VpnServer> combined = new ArrayList<>();
+                        if (balancedServers != null) {
+                            for (VpnServer bs : balancedServers) {
+                                if (bs != null && !isKnownDeadHost(bs.getHost())) {
+                                    combined.add(bs);
+                                }
+                            }
+                        }
+                        try {
+                            List<VpnServer> bypass = WhitelistPoolManager.getInstance(MainActivity.this).getMobileBypassServerPool(MainActivity.this);
+                            if (bypass != null) {
+                                for (VpnServer bp : bypass) {
+                                    if (bp != null && !isKnownDeadHost(bp.getHost())) {
+                                        boolean exists = false;
+                                        for (VpnServer existing : combined) {
+                                            if (existing != null && existing.getHost() != null && existing.getHost().equalsIgnoreCase(bp.getHost())) {
+                                                exists = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!exists) {
+                                            combined.add(bp);
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+
+                        if (!combined.isEmpty()) {
+                            serverList = combined;
+                            AutoSwitchEngine.getInstance(MainActivity.this).setCandidateServers(combined);
                         }
 
                         NetworkPreferences prefs = NetworkPreferences.getInstance(MainActivity.this);
@@ -2054,12 +2047,16 @@ public class MainActivity extends Activity {
         if (currentState == VpnState.CONNECTED || currentState == VpnState.CONNECTING) {
             currentState = VpnState.DISCONNECTED;
             updateUi();
-            NetworkPreferences.getInstance(this).setVpnDesiredActive(false);
 
             Intent dcIntent = new Intent(this, GoblinVpnService.class);
             dcIntent.setAction(GoblinVpnService.ACTION_DISCONNECT);
             startService(dcIntent);
         } else {
+            // User explicitly clicked connect: clear temporary failure states and cooldowns
+            try {
+                AutoSwitchEngine.getInstance(this).notifyUserInitiatedConnect();
+            } catch (Throwable ignored) {}
+
             currentState = VpnState.CONNECTING;
             updateUi();
             requestVpnPermissionAndStart();
@@ -2160,11 +2157,6 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // Reset failover state and penalties on explicit user connect
-        AutoSwitchEngine.getInstance(this).resetFailoverState();
-        ServerPenaltyManager.getInstance(this).resetAll();
-        NetworkPreferences.getInstance(this).setVpnDesiredActive(true);
-
         VpnServer target = getTargetServer();
         NetworkPreferences prefs = NetworkPreferences.getInstance(this);
         Intent startIntent = new Intent(this, GoblinVpnService.class);
@@ -2206,90 +2198,167 @@ public class MainActivity extends Activity {
         if (host == null || host.trim().isEmpty()) return true;
         host = host.trim().toLowerCase();
         return host.startsWith("172.64.") || host.startsWith("172.67.") || host.startsWith("104.18.")
-                || host.startsWith("104.21.") || "spacex.com".equals(host) || "87.228.101.3".equals(host);
+                || host.startsWith("104.21.") || "spacex.com".equals(host) || "87.228.101.3".equals(host)
+                || "78.159.250.155".equals(host);
     }
 
     private VpnServer getTargetServer() {
-        if (!isAutoMode && selectedServer != null && !isKnownDeadHost(selectedServer.getHost())) {
-            return selectedServer;
-        }
-
-        // 1. If VPN service is already active, return the running server immediately
-        VpnServer activeCurrent = GoblinVpnService.getCurrentServer();
-        if (activeCurrent != null && !isKnownDeadHost(activeCurrent.getHost()) && activeCurrent.isAlive()) {
-            return activeCurrent;
-        }
-
         boolean isCellular = false;
         try {
             isCellular = WhitelistPoolManager.isRunningOnCellular(this);
         } catch (Throwable ignored) {}
 
-        // 2. CELLULAR: Prioritize verified Tier 1 mobile bypass pool (Germany Neverspy, Hexdey, Poland, VPS)
-        if (isCellular) {
-            try {
-                List<VpnServer> tier1 = WhitelistPoolManager.getInstance(this).getTier1MobilePool(this);
-                if (tier1 != null && !tier1.isEmpty()) {
-                    List<VpnServer> validCandidates = new ArrayList<>();
-                    for (VpnServer s : tier1) {
-                        if (s != null && !isKnownDeadHost(s.getHost())
-                                && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
-                                && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())
-                                && WhitelistPoolManager.isSniPermittedOnCellular(s.getSni())) {
-                            validCandidates.add(s);
-                        }
-                    }
-                    if (validCandidates.isEmpty()) {
-                        validCandidates.addAll(tier1);
-                    }
-                    VpnServer preflight = ServerPinger.preflightPingSync(validCandidates, 1000);
-                    if (preflight != null) {
-                        AppLogger.i("MainActivity", "⚡ Cellular Preflight ping selected alive bypass node: " + preflight.getDisplayName() + " [" + preflight.getHost() + "]");
-                        return preflight;
-                    }
-                    return validCandidates.get(0);
-                }
-                List<VpnServer> bypassPool = WhitelistPoolManager.getInstance(this).getMobileBypassServerPool(this);
-                if (bypassPool != null && !bypassPool.isEmpty()) {
-                    List<VpnServer> validCandidates = new ArrayList<>();
-                    for (VpnServer s : bypassPool) {
-                        if (s != null && !isKnownDeadHost(s.getHost())
-                                && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
-                                && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())
-                                && WhitelistPoolManager.isSniPermittedOnCellular(s.getSni())) {
-                            validCandidates.add(s);
-                        }
-                    }
-                    if (validCandidates.isEmpty()) {
-                        validCandidates.addAll(bypassPool);
-                    }
-                    VpnServer preflight = ServerPinger.preflightPingSync(validCandidates, 1000);
-                    if (preflight != null) {
-                        return preflight;
-                    }
-                    return validCandidates.get(0);
-                }
-            } catch (Throwable ignored) {}
+        if (!isAutoMode && selectedServer != null && !isKnownDeadHost(selectedServer.getHost())) {
+            if (isCellular && ("193.233.199.233".equals(selectedServer.getHost())
+                    || !WhitelistPoolManager.getInstance(this).isWhitelistedForMobile(selectedServer.getHost()))) {
+                AppLogger.w("MainActivity", "Selected server " + selectedServer.getHost()
+                        + " is foreign / not whitelisted for cellular TSPU bypass! Forcing selection from mobile bypass pool.");
+            } else {
+                return selectedServer;
+            }
         }
 
-        // 3. Standby pool from AutoSwitchEngine (pre-benchmarked asynchronously in background)
+        // =========================================================================
+        // 1. CELLULAR DATA ACTIVE: STRICT 4-TIER PRIORITY CASCADE FOR MOBILE BYPASS
+        // =========================================================================
+        if (isCellular) {
+            // ---------------------------------------------------------------------
+            // TIER 0: PERSONAL PROVEN WORKING SERVERS ON CELLULAR (HISTORICAL STASH)
+            // Instant selection without re-testing or ping delays (0 ms)!
+            // ---------------------------------------------------------------------
+            try {
+                List<VpnServer> provenList = MobileProvenConfigStorage.getInstance(this).getProvenMobileServers();
+                if (provenList != null && !provenList.isEmpty()) {
+                    for (VpnServer ps : provenList) {
+                        if (ps != null && ps.getHost() != null
+                                && !WhitelistPoolManager.isBlockedMobileHost(ps.getHost())
+                                && !WhitelistPoolManager.isBlockedMobileSni(ps.getSni())
+                                && !isKnownDeadHost(ps.getHost())
+                                && !AutoSwitchEngine.getInstance(this).isServerInCooldown(ps.getServerKey())
+                                && !ServerPenaltyManager.getInstance(this).isPenalized(ps.getServerKey())) {
+                            AppLogger.i("MainActivity", "⭐ [Tier 0] Cellular instant select proven working node: "
+                                    + ps.getDisplayName() + " [" + ps.getHost() + ":" + ps.getPort() + "] (SNI=" + ps.getSni() + ", ping=" + ps.getPingMs() + "ms)");
+                            return ps;
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                AppLogger.w("MainActivity", "Error querying MobileProvenConfigStorage: " + t.getMessage());
+            }
+
+            // ---------------------------------------------------------------------
+            // TIER 1: COMMUNITY SERVERS MATCHING MOBILE WHITELIST
+            // ---------------------------------------------------------------------
+            try {
+                List<VpnServer> communityServers = CommunityPoolManager.getInstance(this).getTopCommunityServers();
+                if (communityServers != null && !communityServers.isEmpty()) {
+                    for (VpnServer cs : communityServers) {
+                        if (cs != null && cs.getHost() != null
+                                && !"193.233.199.233".equals(cs.getHost())
+                                && !isKnownDeadHost(cs.getHost())
+                                && WhitelistPoolManager.getInstance(this).isWhitelistedForMobile(cs.getHost())
+                                && !AutoSwitchEngine.getInstance(this).isServerInCooldown(cs.getServerKey())
+                                && !ServerPenaltyManager.getInstance(this).isPenalized(cs.getServerKey())) {
+                            AppLogger.i("MainActivity", "⭐ [Tier 1] Cellular select whitelisted community node: "
+                                    + cs.getDisplayName() + " [" + cs.getHost() + ":" + cs.getPort() + "] (SNI=" + cs.getSni() + ")");
+                            return cs;
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                AppLogger.w("MainActivity", "Error querying CommunityPoolManager: " + t.getMessage());
+            }
+
+            // ---------------------------------------------------------------------
+            // TIER 2 & 3: MOBILE BYPASS POOL (HIGH PROBABILITY AND RESERVE)
+            // ---------------------------------------------------------------------
+            List<VpnServer> bypassPool = WhitelistPoolManager.getInstance(this).getMobileBypassServerPool(this);
+            if (bypassPool != null && !bypassPool.isEmpty()) {
+                AppLogger.i("MainActivity", "Cellular active: prioritizing verified mobile reserve pool (" + bypassPool.size() + " nodes)");
+
+                List<VpnServer> validCandidates = new ArrayList<>();
+                for (VpnServer s : bypassPool) {
+                    if (s != null && !"193.233.199.233".equals(s.getHost())
+                            && !isKnownDeadHost(s.getHost())
+                            && WhitelistPoolManager.getInstance(this).isWhitelistedForMobile(s.getHost())
+                            && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
+                            && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
+                        validCandidates.add(s);
+                    }
+                }
+
+                if (!validCandidates.isEmpty()) {
+                    // Check if alive node is ready in Tier 1 (pick candidate with lowest ping)
+                    VpnServer bestTier1 = null;
+                    for (VpnServer s : validCandidates) {
+                        if (s.getPingMs() >= 20 && s.isAlive() && s.getMobileTier() == 1) {
+                            if (bestTier1 == null || s.getPingMs() < bestTier1.getPingMs()) {
+                                bestTier1 = s;
+                            }
+                        }
+                    }
+                    if (bestTier1 != null) {
+                        AppLogger.i("MainActivity", "⚡ Cellular fast select best alive Tier 1 node: " + bestTier1.getDisplayName()
+                                + " [" + bestTier1.getHost() + ":" + bestTier1.getPort() + "] (SNI=" + bestTier1.getSni() + ", ping=" + bestTier1.getPingMs() + "ms)");
+                        return bestTier1;
+                    }
+
+                    // Check any alive node (pick lowest ping)
+                    VpnServer bestAlive = null;
+                    for (VpnServer s : validCandidates) {
+                        if (s.getPingMs() >= 20 && s.isAlive()) {
+                            if (bestAlive == null || s.getPingMs() < bestAlive.getPingMs()) {
+                                bestAlive = s;
+                            }
+                        }
+                    }
+                    if (bestAlive != null) {
+                        AppLogger.i("MainActivity", "⚡ Cellular fast select best alive node: " + bestAlive.getDisplayName()
+                                + " [" + bestAlive.getHost() + ":" + bestAlive.getPort() + "] (SNI=" + bestAlive.getSni() + ", Tier=" + bestAlive.getMobileTier() + ", ping=" + bestAlive.getPingMs() + "ms)");
+                        return bestAlive;
+                    }
+
+                    // Fast Preflight Telegram API ping on cellular: timeout 1800ms
+                    VpnServer preflight = ServerPinger.preflightTelegramPingSync(validCandidates, 1800);
+                    if (preflight != null) {
+                        AppLogger.i("MainActivity", "⚡ Cellular Telegram Preflight selected verified bypass node: "
+                                + preflight.getDisplayName() + " [" + preflight.getHost() + ":" + preflight.getPort() + "] (SNI=" + preflight.getSni() + ")");
+                        return preflight;
+                    }
+                    VpnServer fallbackTop = validCandidates.get(0);
+                    AppLogger.i("MainActivity", "⚡ Cellular fallback select top Tier candidate: "
+                            + fallbackTop.getDisplayName() + " [" + fallbackTop.getHost() + ":" + fallbackTop.getPort() + "] (SNI=" + fallbackTop.getSni() + ", Tier=" + fallbackTop.getMobileTier() + ")");
+                    return fallbackTop;
+                }
+                for (VpnServer s : bypassPool) {
+                    if (s != null && !"193.233.199.233".equals(s.getHost())
+                            && !isKnownDeadHost(s.getHost())
+                            && WhitelistPoolManager.getInstance(this).isWhitelistedForMobile(s.getHost())) {
+                        return s;
+                    }
+                }
+            }
+        }
+
+        // =========================================================================
+        // 2. WI-FI / ETHERNET: Fast Pre-Flight from Warm Standby Pool
+        // =========================================================================
         try {
             List<VpnServer> warmStandby = AutoSwitchEngine.getInstance(this).getStandbyPool();
             if (warmStandby != null && !warmStandby.isEmpty()) {
                 for (VpnServer s : warmStandby) {
                     if (s != null && s.isAlive() && !isKnownDeadHost(s.getHost())
                             && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
-                            && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())
-                            && (!isCellular || WhitelistPoolManager.isSniPermittedOnCellular(s.getSni()))) {
+                            && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
+                        AppLogger.i("MainActivity", "⚡ Fast Pre-Flight: Selected warm standby node " + s.getDisplayName() + " [" + s.getHost() + "]");
                         return s;
                     }
                 }
             }
         } catch (Throwable ignored) {}
 
-        // 4. WI-FI: Check verified community top nodes first
+        // On Wi-Fi: check verified community top nodes first
         if (!isCellular) {
-            // WI-FI: Check verified community top nodes first
             try {
                 List<VpnServer> commTop = CommunityPoolManager.getInstance(this).getTopCommunityServers();
                 if (commTop != null && !commTop.isEmpty()) {
@@ -2297,6 +2366,7 @@ public class MainActivity extends Activity {
                         if (s != null && !isKnownDeadHost(s.getHost())
                                 && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
                                 && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
+                            AppLogger.i("MainActivity", "⭐ Selected verified Community Top node: " + s.getDisplayName());
                             return s;
                         }
                     }
@@ -2304,36 +2374,56 @@ public class MainActivity extends Activity {
             } catch (Throwable ignored) {}
         }
 
-        // 4. In-memory serverList fallback
+        if (!isAutoMode && selectedServer != null && !isKnownDeadHost(selectedServer.getHost())) {
+            return selectedServer;
+        }
+
         try {
             if (serverList == null || serverList.isEmpty()) {
                 serverList = getMergedServerList();
             }
             if (serverList != null && !serverList.isEmpty()) {
-                for (VpnServer s : serverList) {
-                    if (s != null && s.isAlive() && s.getPingMs() >= 20 && !isKnownDeadHost(s.getHost())
-                            && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
-                            && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
-                        return s;
-                    }
+                List<VpnServer> prioritized = null;
+                try {
+                    prioritized = WhitelistPoolManager.getInstance(this).prioritizeServersForNetwork(this, serverList);
+                } catch (Throwable t) {
+                    AppLogger.w("MainActivity", "WhitelistPool prioritization error: " + t.getMessage());
                 }
-                for (VpnServer s : serverList) {
-                    if (s != null && s.isAlive() && !isKnownDeadHost(s.getHost())
-                            && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
-                            && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
-                        return s;
-                    }
+                if (prioritized == null || prioritized.isEmpty()) {
+                    prioritized = serverList;
                 }
-                for (VpnServer s : serverList) {
-                    if (s != null && !isKnownDeadHost(s.getHost())) {
-                        return s;
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
 
-        // 5. Emergency reserve storage
-        try {
+                // Filter candidates: exclude dead hosts and penalized nodes
+                List<VpnServer> candidates = new ArrayList<>();
+                for (VpnServer s : prioritized) {
+                    if (s != null && !isKnownDeadHost(s.getHost())
+                            && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
+                            && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
+                        candidates.add(s);
+                    }
+                }
+
+                // If candidate pool has measured pings, pick the best alive node
+                for (VpnServer s : candidates) {
+                    if (s.getPingMs() >= 20 && s.isAlive()) return s;
+                }
+                for (VpnServer s : candidates) {
+                    if (s.isAlive()) return s;
+                }
+
+                // Cold start (unmeasured pings): Rapid parallel preflight ping (750ms)
+                if (!candidates.isEmpty()) {
+                    VpnServer preflight = ServerPinger.preflightPingSync(candidates, 750);
+                    if (preflight != null) {
+                        AppLogger.i("MainActivity", "⚡ Preflight ping selected living node: " + preflight.getDisplayName());
+                        return preflight;
+                    }
+                    return candidates.get(0);
+                }
+
+                return prioritized.get(0);
+            }
+
             List<VpnServer> emergency = EmergencyConfigStorage.loadEmergencyReserve(this);
             if (emergency != null && !emergency.isEmpty()) {
                 return emergency.get(0);
@@ -2342,8 +2432,9 @@ public class MainActivity extends Activity {
             if (fallback != null && !fallback.isEmpty()) {
                 return fallback.get(0);
             }
-        } catch (Throwable ignored) {}
-
+        } catch (Throwable t) {
+            AppLogger.e("MainActivity", "Error in getTargetServer: " + t.getMessage(), t);
+        }
         return null;
     }
 
@@ -2352,14 +2443,37 @@ public class MainActivity extends Activity {
     }
 
     private void openServerSelection() {
-        if (serverList == null || serverList.isEmpty()) {
-            serverList = EmergencyConfigStorage.loadEmergencyReserve(this);
+        boolean isCellular = false;
+        try {
+            isCellular = WhitelistPoolManager.isRunningOnCellular(this);
+        } catch (Throwable ignored) {}
+
+        if (serverList == null || serverList.isEmpty() || (isCellular && serverList.size() < 10)) {
+            serverList = getMergedServerList();
         }
         pingServers();
 
         showDialogScrim();
 
-        activeServerDialog = ServerSelectionDialog.show(this, serverList, selectedServer, isAutoMode, new ServerSelectionDialog.OnServerSelectedListener() {
+        List<VpnServer> dialogServers = new ArrayList<>();
+        if (isCellular) {
+            for (VpnServer s : serverList) {
+                if (s != null && !isKnownDeadHost(s.getHost()) && WhitelistPoolManager.getInstance(this).isWhitelistedForMobile(s.getHost())) {
+                    dialogServers.add(s);
+                }
+            }
+            if (dialogServers.isEmpty()) {
+                dialogServers.addAll(serverList);
+            }
+        } else {
+            for (VpnServer s : serverList) {
+                if (s != null && !isKnownDeadHost(s.getHost())) {
+                    dialogServers.add(s);
+                }
+            }
+        }
+
+        activeServerDialog = ServerSelectionDialog.show(this, dialogServers, selectedServer, isAutoMode, new ServerSelectionDialog.OnServerSelectedListener() {
             @Override
             public void onServerSelected(VpnServer server) {
                 hideDialogScrim();
@@ -2459,44 +2573,16 @@ public class MainActivity extends Activity {
 
         if (isAutoMode) {
             tvCardFlag.setText("⚡");
-            tvCardTitle.setText("Автовыбор");
-            if (tvCardBadge != null) {
-                tvCardBadge.setVisibility(View.GONE);
-            }
-            String country = (target != null && target.getCountry() != null) ? target.getCountry() : "Оптимальный";
-            if (tvCardCity != null) {
-                tvCardCity.setText(country);
-            }
+            String country = (target != null && target.getCountry() != null) ? target.getCountry() : "Быстрый";
+            tvCardTitle.setText("Автовыбор (" + country + ")");
             updateBottomCardPing(target != null ? target.getPingMs() : 70);
         } else if (target != null) {
             tvCardFlag.setText(target.getFlag());
             tvCardTitle.setText(target.getCountry());
-            if (tvCardBadge != null) {
-                if (target.isCommunityTop()) {
-                    tvCardBadge.setVisibility(View.VISIBLE);
-                    tvCardBadge.setText("ТОП");
-                } else {
-                    tvCardBadge.setVisibility(View.GONE);
-                }
-            }
-            if (tvCardCity != null) {
-                String remark = target.getRemark();
-                if (remark != null && !remark.isEmpty()) {
-                    tvCardCity.setText(remark);
-                } else {
-                    tvCardCity.setText(target.getCountry() + " • Прямое подключение");
-                }
-            }
             updateBottomCardPing(target.getPingMs());
         } else {
             tvCardFlag.setText("⚡");
             tvCardTitle.setText("Автовыбор");
-            if (tvCardBadge != null) {
-                tvCardBadge.setVisibility(View.GONE);
-            }
-            if (tvCardCity != null) {
-                tvCardCity.setText("Оптимальный");
-            }
             updateBottomCardPing(70);
         }
     }
@@ -2952,6 +3038,13 @@ public class MainActivity extends Activity {
 
     private void updateTelemetry() {
         if (tvTimer == null || tvTotalTraffic == null) return;
+
+        if (currentState != VpnState.CONNECTED) {
+            if (tvTrafficSubtext != null) {
+                tvTrafficSubtext.setText("↓ 0 КБ/с • ↑ 0 КБ/с");
+            }
+            return;
+        }
 
         long now = System.currentTimeMillis();
         if (sessionStartTimeMs <= 0) {

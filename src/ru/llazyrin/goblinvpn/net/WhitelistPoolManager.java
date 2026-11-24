@@ -27,10 +27,13 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,7 +56,10 @@ import ru.llazyrin.goblinvpn.service.GoblinVpnService;
 public class WhitelistPoolManager {
     private static final String TAG = "WhitelistPoolManager";
     public static final String WHITELIST_URL = "https://raw.githubusercontent.com/d010b/custom_geoip/refs/heads/main/whitelist_url.txt";
-    private static final String CACHE_FILE_NAME = "cellular_whitelist.txt";
+    public static final String WHITELIST_MIRROR_URL = "https://llazyrin.online/cellular_whitelist.txt";
+    public static final String ZIENG2_VLESS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt";
+    public static final String CACHE_FILE_NAME = "cellular_whitelist.txt";
+    public static final String ASSET_WHITELIST_FILE = "cellular_whitelist.txt";
 
     public static final String MOBILE_CONFIGS_API_URL = "https://llazyrin.online/api/app/mobile-configs";
     public static final String MOBILE_CONFIGS_FALLBACK_URL = "https://llazyrin.online/mobile_whitelist_configs.txt";
@@ -92,6 +98,21 @@ public class WhitelistPoolManager {
     private final Set<String> domainSet = Collections.synchronizedSet(new HashSet<String>());
     private volatile boolean isLoaded = false;
 
+    // In-memory latency cache for mobile bypass candidate nodes
+    private static final Map<String, Integer> serverPingCache = new ConcurrentHashMap<>();
+
+    public static void recordServerPing(String serverKey, int pingMs) {
+        if (serverKey != null && pingMs > 0) {
+            serverPingCache.put(serverKey.toLowerCase(Locale.ROOT), pingMs);
+        }
+    }
+
+    public static int getCachedPing(String serverKey) {
+        if (serverKey == null) return -1;
+        Integer p = serverPingCache.get(serverKey.toLowerCase(Locale.ROOT));
+        return p != null ? p : -1;
+    }
+
     public static WhitelistPoolManager getInstance(Context context) {
         if (instance == null) {
             synchronized (WhitelistPoolManager.class) {
@@ -127,6 +148,17 @@ public class WhitelistPoolManager {
             }
         }
 
+        // Load bundled full cellular whitelist from assets (869 CIDR subnets from d010b)
+        try (InputStream is = appContext.getAssets().open(ASSET_WHITELIST_FILE);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+            parseLines(reader);
+            isLoaded = true;
+            AppLogger.i(TAG, "Loaded " + cidrRanges.size() + " CIDR ranges and " + domainSet.size() + " domains from bundled assets.");
+            return;
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to load assets cellular_whitelist.txt: " + e.getMessage());
+        }
+
         // Built-in initial seeds in case of first launch without internet
         loadInitialSeeds();
     }
@@ -154,7 +186,12 @@ public class WhitelistPoolManager {
             public void run() {
                 HttpURLConnection conn = null;
                 try {
-                    URL url = new URL(WHITELIST_URL);
+                    URL url;
+                    try {
+                        url = new URL(WHITELIST_URL);
+                    } catch (Exception e) {
+                        url = new URL(WHITELIST_MIRROR_URL);
+                    }
                     conn = (HttpURLConnection) url.openConnection();
                     conn.setConnectTimeout(8000);
                     conn.setReadTimeout(8000);
@@ -322,57 +359,123 @@ public class WhitelistPoolManager {
     }
 
     /**
+     * Checks if a given SNI is known to be blocked by Russian mobile operators / TSPU.
+     */
+    public static boolean isBlockedMobileSni(String sni) {
+        if (sni == null) return false;
+        String s = sni.trim().toLowerCase(Locale.ROOT);
+        return s.contains("cloudflare.com") || s.contains("yt3.ggpht.com")
+                || s.contains("discord.com") || s.contains("instagram.com")
+                || s.contains("icloud.com") || s.contains("apple.com");
+    }
+
+    public static boolean isBlockedMobileHost(String host) {
+        if (host == null) return false;
+        String h = host.trim();
+        return "193.233.199.233".equals(h);
+    }
+
+    /**
+     * Evaluates SNI resilience and compatibility with Russian mobile TSPU whitelists.
+     * Russian telecom operators prioritize ya.ru, vk.com, ok.ru, gosuslugi.ru, sberbank.ru.
+     */
+    public static int getSniMobileScore(String sni, int port) {
+        if (sni == null || sni.trim().isEmpty()) {
+            return 10;
+        }
+        String s = sni.trim().toLowerCase(Locale.ROOT);
+        if (isBlockedMobileSni(s)) {
+            return -100;
+        }
+
+        // =========================================================================
+        // TOP PRIORITY: Verified European / Global exit nodes on Russian whitelisted carrier CIDRs
+        // These nodes pass mobile TSPU cellular blocks AND offer unrestricted access to the open web
+        // =========================================================================
+        if (s.contains("plaindune.com")) {
+            return 100; // 🇧🇬 Bulgaria European egress on Beeline CDN IP 78.159.240.72 / 78.159.250.155 (Gold standard!)
+        }
+        if (s.contains("hexdey.com") || s.contains("144.hexdey")) {
+            return 99; // 🇩🇪 Germany European egress on Selectel CIDR 178.248.236.229
+        }
+        if (s.contains("olvento.space")) {
+            return 98; // 🇩🇪 Germany European egress on Selectel CIDR 188.225.36.219 (429ms RTT)
+        }
+        if (s.contains("cdn.dash.gearmonster.org") || s.contains("gearmonster.org")) {
+            return 97; // 🇬🇧 United Kingdom egress
+        }
+        if (s.contains("paruscamp.com") || s.contains("community-bd.paruscamp.com")) {
+            return 96; // 🇳🇱 Netherlands European egress
+        }
+        if (s.contains("cadrin.wtf") || s.contains("flintstack.dev")) {
+            return 95; // 🇩🇪 Germany egress
+        }
+        if (s.contains("for.quick-frost.ru") || s.contains("quick-frost.ru")) {
+            return 96; // 🇳🇱 Netherlands egress
+        }
+        if (s.contains("emberworks.cloud")) {
+            return 95; // 🇸🇪 Sweden European egress
+        }
+        if (s.contains("cdn.dash.gearmonster.org") || s.contains("gearmonster.org")) {
+            return 95; // 🇬🇧 United Kingdom egress
+        }
+        if (s.contains("olvento.space") || s.contains("telemetryapi.org") || s.contains("maxleshax") || s.contains("fosonmine")) {
+            return 92; // Secondary European egress
+        }
+
+        // Russian domestic services: excellent handshake on mobile towers, but domestic-only egress / captcha
+        if (s.contains("ya.ru") || s.contains("yandex") || s.contains("yastatic.net")) {
+            return 90;
+        }
+        if (s.contains("vk.com") || s.contains("vk.me") || s.contains("userapi.com")) {
+            return 80;
+        }
+        if (s.contains("wholebeam.com")) {
+            return 75; // VK cluster in 185.86.144.0/22 (domestic intranet, captcha on foreign web)
+        }
+        if (s.contains("ok.ru") || s.contains("okcdn.ru")) {
+            return 75;
+        }
+        if (s.contains("gosuslugi") || s.contains("sberbank") || s.contains("tinkoff")) {
+            return 70;
+        }
+        if (s.contains("gateway.icloud.com") || s.contains("icloud.com")
+                || s.contains("neverspy") || s.contains("bachidze")
+                || s.contains("tunnely") || s.contains("sslip.io")) {
+            return 60;
+        }
+        return 50;
+    }
+
+    /**
      * Checks whether server is tagged for mobile or matches whitelist pool.
      */
     public boolean isServerWhitelistedOrTagged(VpnServer server) {
         if (server == null) return false;
-        String host = server.getHost();
-        if (host == null || host.trim().isEmpty()) return false;
-        host = host.trim();
-
-        // 1. Dedicated VPS nodes (Sweden Stockholm, Yandex Reality, VK Reality, etc.)
-        if ("193.233.199.233".equals(host) || "185.86.145.173".equals(host)
-                || "193.233.198.117".equals(host) || "178.248.236.229".equals(host)) {
+        if (isBlockedMobileSni(server.getSni())) {
+            return false;
+        }
+        if (server.getPort() == 8445 || server.getPort() == 8446) {
+            return true; // Dedicated Yandex & VK Reality bypass ports
+        }
+        if (isWhitelistedForMobile(server.getHost())) {
             return true;
         }
-
-        // 2. Telecom CIDR / domain whitelist
-        if (isWhitelistedForMobile(host)) {
-            return true;
-        }
-
-        // 3. User's proven mobile history in local stash
-        try {
-            if (ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage.getInstance(appContext).isProven(server.getServerKey())) {
+        String sni = server.getSni();
+        if (sni != null) {
+            if (getSniMobileScore(sni, server.getPort()) >= 90) {
                 return true;
             }
-        } catch (Throwable ignored) {}
-
-        // 4. Tags in remark
+        }
         String remark = server.getRemark();
         if (remark != null) {
             String r = remark.toLowerCase(Locale.ROOT);
             if (r.contains("mobile") || r.contains("cellular") || r.contains("lte")
                     || r.contains("4g") || r.contains("bypass") || r.contains("whitelist")
-                    || r.contains("швеция") || r.contains("обход") || r.contains("глушил")
-                    || r.contains("ultra") || r.contains("yandex") || r.contains("shield")) {
+                    || r.contains("глушилок") || r.contains("яндекс") || r.contains("yandex") || r.contains("vk")) {
                 return true;
             }
         }
-
-        // 5. Present in Mobile Bypass Pool
-        try {
-            List<VpnServer> pool = getMobileBypassServerPool(appContext);
-            if (pool != null) {
-                String targetKey = server.getServerKey().toLowerCase(Locale.ROOT);
-                for (VpnServer s : pool) {
-                    if (s != null && s.getServerKey().toLowerCase(Locale.ROOT).equals(targetKey)) {
-                        return true;
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
-
         return false;
     }
 
@@ -387,63 +490,82 @@ public class WhitelistPoolManager {
             ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return false;
 
-            // Direct check via NetworkInfo (immediately reflects Wi-Fi toggle off/on)
-            NetworkInfo wifiInfo = cm.getNetworkInfo(ConnectivityManager.TYPE_WIFI);
-            NetworkInfo ethernetInfo = cm.getNetworkInfo(ConnectivityManager.TYPE_ETHERNET);
-            boolean wifiConnected = (wifiInfo != null && wifiInfo.isConnected());
-            boolean ethernetConnected = (ethernetInfo != null && ethernetInfo.isConnected());
+            boolean wifiActivelyConnected = false;
+            boolean cellularConnected = false;
 
-            if (wifiConnected || ethernetConnected) {
-                return false;
-            }
-
-            NetworkInfo mobileInfo = cm.getNetworkInfo(ConnectivityManager.TYPE_MOBILE);
-            boolean mobileConnected = (mobileInfo != null && mobileInfo.isConnected());
-
+            // 1. Inspect underlying physical network interfaces (skipping VPN overlay)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 Network[] allNetworks = cm.getAllNetworks();
-                boolean hasPhysicalCellular = false;
-                boolean hasPhysicalWifi = false;
-
                 if (allNetworks != null) {
                     for (Network net : allNetworks) {
                         if (net == null) continue;
                         NetworkCapabilities caps = cm.getNetworkCapabilities(net);
                         if (caps == null) continue;
-
-                        // 1. Игнорируем сам VPN-интерфейс, так как он наследует флаги предыдущей сети
                         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
                             continue;
                         }
 
-                        // 2. Wi-Fi или Ethernet считается активным только при наличии NET_CAPABILITY_INTERNET и отсутствии приостановки
+                        boolean hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+                        boolean notSuspended = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED);
+
+                        NetworkInfo info = cm.getNetworkInfo(net);
+                        boolean isConn = (info != null && info.isConnected());
+
                         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                                 || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-                            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                                    && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)) {
-                                hasPhysicalWifi = true;
+                            // Wi-Fi is ONLY treated as active if it is genuinely connected and has internet
+                            if (isConn && hasInternet && notSuspended) {
+                                wifiActivelyConnected = true;
                             }
-                        }
-
-                        // 3. Сотовая сеть
-                        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-                            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                                    || caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)) {
-                                hasPhysicalCellular = true;
+                        } else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                            if (isConn || hasInternet) {
+                                cellularConnected = true;
                             }
                         }
                     }
                 }
+            }
 
-                if (hasPhysicalWifi) {
-                    return false;
-                }
-                if (hasPhysicalCellular) {
-                    return true;
+            // If Wi-Fi is genuinely connected and delivering internet, we are NOT on cellular
+            if (wifiActivelyConnected) {
+                return false;
+            }
+
+            // If a cellular interface is present and connected, device is on cellular
+            if (cellularConnected) {
+                return true;
+            }
+
+            // 2. Direct check of the active default network (Android 6.0+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Network activeNet = cm.getActiveNetwork();
+                if (activeNet != null) {
+                    NetworkCapabilities caps = cm.getNetworkCapabilities(activeNet);
+                    if (caps != null) {
+                        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                            return true;
+                        }
+                        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                            return false;
+                        }
+                    }
                 }
             }
 
-            return mobileConnected && !wifiConnected;
+            // 3. TelephonyManager check: DATA_CONNECTED indicates active mobile data subscription
+            try {
+                TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm != null && tm.getDataState() == TelephonyManager.DATA_CONNECTED) {
+                    return true;
+                }
+            } catch (Throwable ignored) {}
+
+            // 4. Fallback for legacy Android versions
+            NetworkInfo activeInfo = cm.getActiveNetworkInfo();
+            if (activeInfo != null && activeInfo.isConnected()) {
+                return activeInfo.getType() == ConnectivityManager.TYPE_MOBILE;
+            }
         } catch (Exception e) {
             Log.w(TAG, "Error checking cellular network state: " + e.getMessage());
         }
@@ -567,7 +689,7 @@ public class WhitelistPoolManager {
                             conn.setRequestMethod("GET");
                             conn.setConnectTimeout(7000);
                             conn.setReadTimeout(7000);
-                            conn.setRequestProperty("User-Agent", "llazyrinVPN/2.8.0 (Android Anti-Jamming)");
+                            conn.setRequestProperty("User-Agent", "llazyrinVPN/2.8.2 (Android Anti-Jamming)");
 
                             int code = conn.getResponseCode();
                             if (code == 200) {
@@ -584,6 +706,39 @@ public class WhitelistPoolManager {
                             conn.disconnect();
                         } catch (Throwable t) {
                             Log.w(TAG, "Mobile configs fallback fetch failed: " + t.getMessage());
+                        }
+                    }
+
+                    // 3. Прямой источник с GitHub (zieng2 vless_universal.txt) с фильтрацией по whitelist CIDR
+                    if (rawConfigs.size() < 30) {
+                        try {
+                            URL url = new URL(ZIENG2_VLESS_URL);
+                            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                            conn.setRequestMethod("GET");
+                            conn.setConnectTimeout(8000);
+                            conn.setReadTimeout(8000);
+                            conn.setRequestProperty("User-Agent", "llazyrinVPN/2.8.2 (Android Anti-Jamming)");
+                            int code = conn.getResponseCode();
+                            if (code == 200) {
+                                try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                                    String line;
+                                    while ((line = r.readLine()) != null) {
+                                        line = line.trim();
+                                        if (!line.startsWith("vless://")) continue;
+                                        VpnServer cand = VpnSubscriptionClient.parseVlessLine(line);
+                                        if (cand != null && cand.getHost() != null) {
+                                            if (isWhitelistedForMobile(cand.getHost()) && !isBlockedMobileSni(cand.getSni())) {
+                                                if (!rawConfigs.contains(line)) {
+                                                    rawConfigs.add(line);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            conn.disconnect();
+                        } catch (Throwable t) {
+                            Log.w(TAG, "Zieng2 direct vless fetch failed: " + t.getMessage());
                         }
                     }
 
@@ -619,100 +774,41 @@ public class WhitelistPoolManager {
     }
 
     /**
-     * Checks if a given server belongs to the mobile bypass pool.
-     */
-    public static boolean isMobileBypassServer(Context context, VpnServer server) {
-        if (server == null || server.getHost() == null) return false;
-        try {
-            List<VpnServer> pool = getInstance(context).getMobileBypassServerPool(context);
-            if (pool != null) {
-                String targetKey = server.getServerKey().toLowerCase(Locale.ROOT);
-                for (VpnServer s : pool) {
-                    if (s != null && s.getServerKey().toLowerCase(Locale.ROOT).equals(targetKey)) {
-                        return true;
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
-        return false;
-    }
-
-    /**
-     * Checks if the given SNI is permitted/unthrottled on Russian mobile networks.
-     * Prevents routing cellular traffic through heavily throttled/blocked domains.
-     */
-    public static boolean isSniPermittedOnCellular(String sni) {
-        if (sni == null || sni.trim().isEmpty()) return true;
-        String s = sni.trim().toLowerCase(Locale.ROOT);
-        if (s.contains("instagram") || s.contains("facebook") || s.contains("twitter") || s.contains("x.com")) {
-            return false;
-        }
-        return true;
-    }
-
-    /**
-     * Returns Tier 1 mobile pool: proven working nodes from device storage + verified Telegram nodes.
-     */
-    public List<VpnServer> getTier1MobilePool(Context context) {
-        Context ctx = (context != null) ? context.getApplicationContext() : appContext;
-        List<VpnServer> list = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-
-        // 1. Proven mobile configs from storage
-        try {
-            List<VpnServer> proven = MobileProvenConfigStorage.getInstance(ctx).getProvenMobileServers();
-            if (proven != null && !proven.isEmpty()) {
-                for (VpnServer s : proven) {
-                    if (s != null && s.getHost() != null && !MainActivity.isKnownDeadHost(s.getHost())) {
-                        String k = s.getServerKey().toLowerCase(Locale.ROOT);
-                        if (!seen.contains(k)) {
-                            seen.add(k);
-                            list.add(s);
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
-
-        // 2. Verified Telegram configs (Hexdey, Neverspy, Poland, Russia Yandex)
-        try {
-            loadVerifiedTelegramConfigs(ctx, list, seen);
-        } catch (Throwable ignored) {}
-
-        return list;
-    }
-
-    /**
-     * Возвращает многоуровневый резервный пул специализированных узлов (VLESS Reality)
-     * для обхода глушилок и фильтрации мобильных операторов:
+     * Возвращает 3-уровневый интеллектуальный резервный пул серверов (VLESS Reality)
+     * для сотовых сетей РФ (обход ТСПУ и белые списки базовых станций):
      *
-     * Tier 1 (Высший приоритет): Доказанно работавшие на сотовой сети узлы этого пользователя
-     * Tier 2: Проверенные высокоустойчивые ноды сообщества и VPS (ya.ru:8445, icloud:8443, vk:443, cdn:2053)
-     * Tier 3: Динамически обновленные серверы из кэша / API
-     * Tier 4: Встроенные эталонные активы и семена безопасности
+     * Пул 1 (Высокая вероятность, ~15 конфигов):
+     *   - Доказанно работавшие на этом телефоне (MobileProvenConfigStorage)
+     *   - Выделенные порты VPS 8445 (Yandex Reality) и 8446 (VK Reality)
+     *   - Проверенные российские белые SNI (ya.ru, vk.com, 144.hexdey.com, okcdn.ru, ok.ru)
+     *   - Белые IP/CIDR из базы Роскомнадзора / операторов РФ
+     *
+     * Пул 2 (Средняя вероятность, ~10 конфигов):
+     *   - Чистые Reality-ноды зарубежных партнеров (gateway.icloud.com, neverspy, bachidze, tunnely, sslip.io, cdn)
+     *   - Топ сообщества с положительным рейтингом
+     *
+     * Пул 3 (Резервная вероятность, ~5-8 конфигов):
+     *   - Аварийные семена безопасности (GoblinSecurityVault)
+     *   - Локальный зашифрованный тайник (EmergencyConfigStorage)
      */
     public List<VpnServer> getMobileBypassServerPool(Context context) {
         Context ctx = (context != null) ? context.getApplicationContext() : appContext;
         List<VpnServer> combined = new ArrayList<>();
         Set<String> seenKeys = new HashSet<>();
 
-        // Tier 0: Проверенные Telegram конфиги обхода блокировок (Германия Neverspy, Германия Hexdey, Польша, Швейцария)
-        try {
-            loadVerifiedTelegramConfigs(ctx, combined, seenKeys);
-        } catch (Throwable t) {
-            Log.w(TAG, "Error loading verified telegram configs: " + t.getMessage());
-        }
-
-        // Tier 1: Доказанно работающие на сотовой связи узлы данного устройства
+        // 1. Доказанно работающие на сотовой связи узлы данного устройства (строго в пределах белых списков РФ)
         try {
             List<VpnServer> proven = MobileProvenConfigStorage.getInstance(ctx).getProvenMobileServers();
             if (proven != null && !proven.isEmpty()) {
                 for (VpnServer s : proven) {
-                    if (s != null && s.getHost() != null && !MainActivity.isKnownDeadHost(s.getHost())) {
-                        String key = s.getServerKey().toLowerCase(Locale.ROOT);
-                        if (!seenKeys.contains(key)) {
-                            seenKeys.add(key);
-                            combined.add(s);
+                    if (s != null && s.getHost() != null && !s.getHost().equals("193.233.199.233")
+                            && !MainActivity.isKnownDeadHost(s.getHost()) && !isBlockedMobileSni(s.getSni())) {
+                        if (isWhitelistedForMobile(s.getHost())) {
+                            String key = s.getServerKey().toLowerCase(Locale.ROOT);
+                            if (!seenKeys.contains(key)) {
+                                seenKeys.add(key);
+                                combined.add(s);
+                            }
                         }
                     }
                 }
@@ -721,16 +817,19 @@ public class WhitelistPoolManager {
             Log.w(TAG, "Error querying MobileProvenConfigStorage: " + t.getMessage());
         }
 
-        // Tier 2: Высокоустойчивые серверы сообщества и нашего VPS (с незаблокированными SNI и портами 8443, 8445, 2053)
+        // 2. Высокоустойчивые серверы сообщества (строго в пределах белых CIDR подсетей, зарубежные серверы исключены)
         try {
             List<VpnServer> comm = CommunityPoolManager.getInstance(ctx).getTopCommunityServers();
             if (comm != null && !comm.isEmpty()) {
                 for (VpnServer s : comm) {
-                    if (s != null && s.getHost() != null && !MainActivity.isKnownDeadHost(s.getHost())) {
-                        String key = s.getServerKey().toLowerCase(Locale.ROOT);
-                        if (!seenKeys.contains(key)) {
-                            seenKeys.add(key);
-                            combined.add(s);
+                    if (s != null && s.getHost() != null && !s.getHost().equals("193.233.199.233")
+                            && !MainActivity.isKnownDeadHost(s.getHost()) && !isBlockedMobileSni(s.getSni())) {
+                        if (isWhitelistedForMobile(s.getHost())) {
+                            String key = s.getServerKey().toLowerCase(Locale.ROOT);
+                            if (!seenKeys.contains(key)) {
+                                seenKeys.add(key);
+                                combined.add(s);
+                            }
                         }
                     }
                 }
@@ -739,7 +838,7 @@ public class WhitelistPoolManager {
             Log.w(TAG, "Error querying CommunityPoolManager: " + t.getMessage());
         }
 
-        // Tier 3: Динамически обновленные ноды из локального кэша
+        // 3. Динамически обновленные ноды из локального кэша (zieng2)
         File cacheFile = new File(ctx.getFilesDir(), MOBILE_CONFIGS_CACHE_FILE);
         if (cacheFile.exists() && cacheFile.length() > 0) {
             try (FileInputStream fis = new FileInputStream(cacheFile);
@@ -747,39 +846,46 @@ public class WhitelistPoolManager {
                 List<VpnServer> cachedNodes = new ArrayList<>();
                 parseBypassConfigLines(reader, cachedNodes);
                 for (VpnServer cn : cachedNodes) {
-                    if (cn != null && cn.getHost() != null && !MainActivity.isKnownDeadHost(cn.getHost())) {
-                        String key = cn.getServerKey().toLowerCase(Locale.ROOT);
-                        if (!seenKeys.contains(key)) {
-                            seenKeys.add(key);
-                            combined.add(cn);
+                    if (cn != null && cn.getHost() != null && !cn.getHost().equals("193.233.199.233")
+                            && !MainActivity.isKnownDeadHost(cn.getHost()) && !isBlockedMobileSni(cn.getSni())) {
+                        if (isWhitelistedForMobile(cn.getHost())) {
+                            String key = cn.getServerKey().toLowerCase(Locale.ROOT);
+                            if (!seenKeys.contains(key)) {
+                                seenKeys.add(key);
+                                combined.add(cn);
+                            }
                         }
                     }
                 }
             } catch (Throwable ignored) {}
         }
 
-        // Tier 4: Эталонные встроенные ноды из assets
+        // 4. Эталонные встроенные ноды из assets (все 65 проверенных конфигов zieng2)
         try (InputStream is = ctx.getAssets().open("mobile_whitelist_configs.txt");
              BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
             List<VpnServer> assetNodes = new ArrayList<>();
             parseBypassConfigLines(reader, assetNodes);
             for (VpnServer an : assetNodes) {
-                if (an != null && an.getHost() != null && !MainActivity.isKnownDeadHost(an.getHost())) {
-                    String key = an.getServerKey().toLowerCase(Locale.ROOT);
-                    if (!seenKeys.contains(key)) {
-                        seenKeys.add(key);
-                        combined.add(an);
+                if (an != null && an.getHost() != null && !an.getHost().equals("193.233.199.233")
+                        && !MainActivity.isKnownDeadHost(an.getHost()) && !isBlockedMobileSni(an.getSni())) {
+                    if (isWhitelistedForMobile(an.getHost())) {
+                        String key = an.getServerKey().toLowerCase(Locale.ROOT);
+                        if (!seenKeys.contains(key)) {
+                            seenKeys.add(key);
+                            combined.add(an);
+                        }
                     }
                 }
             }
         } catch (Throwable ignored) {}
 
-        // Tier 4 (Fallback): Резервные семена безопасности
-        if (combined.isEmpty()) {
-            List<VpnServer> reserve = ru.llazyrin.goblinvpn.security.EmergencyConfigStorage.loadEmergencyReserve(ctx);
-            if (reserve != null) {
-                for (VpnServer rn : reserve) {
-                    if (rn != null && rn.getHost() != null && !MainActivity.isKnownDeadHost(rn.getHost())) {
+        // 5. Резервные семена безопасности (строго с проверкой белого списка, без нашего зарубежного VPS)
+        List<VpnServer> emergencyReserve = ru.llazyrin.goblinvpn.security.EmergencyConfigStorage.loadEmergencyReserve(ctx);
+        if (emergencyReserve != null) {
+            for (VpnServer rn : emergencyReserve) {
+                if (rn != null && rn.getHost() != null && !rn.getHost().equals("193.233.199.233")
+                        && !MainActivity.isKnownDeadHost(rn.getHost()) && !isBlockedMobileSni(rn.getSni())) {
+                    if (isWhitelistedForMobile(rn.getHost())) {
                         String key = rn.getServerKey().toLowerCase(Locale.ROOT);
                         if (!seenKeys.contains(key)) {
                             seenKeys.add(key);
@@ -790,40 +896,94 @@ public class WhitelistPoolManager {
             }
         }
 
-        AppLogger.i(TAG, "Assembled Mobile Anti-Jamming Bypass Pool: " + combined.size()
-                + " nodes (Tier 1 proven count=" + MobileProvenConfigStorage.getInstance(ctx).getCount() + ")");
-        return combined;
-    }
+        // =========================================================================
+        // РАСПРЕДЕЛЕНИЕ ПО 3 ПУЛАМ ВЕРОЯТНОСТИ ПОДКЛЮЧЕНИЯ
+        // =========================================================================
+        List<VpnServer> tier1 = new ArrayList<>(); // До 15 серверов (Высшая вероятность: белый SNI РФ, wholebeam, proven)
+        List<VpnServer> tier2 = new ArrayList<>(); // До 10 серверов (Средняя вероятность: белые CIDR ТСПУ, score >= 70)
+        List<VpnServer> tier3 = new ArrayList<>(); // До 5-8 серверов (Резерв)
 
-    private static void loadVerifiedTelegramConfigs(Context ctx, List<VpnServer> combined, Set<String> seenKeys) {
-        try (InputStream is = ctx.getAssets().open("verified_telegram_configs.json");
-             BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
-            JSONArray arr = new JSONArray(sb.toString());
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject obj = arr.getJSONObject(i);
-                String uri = obj.optString("uri");
-                if (uri == null || uri.isEmpty()) continue;
-                VpnServer s = VpnSubscriptionClient.parseVlessLine(uri);
-                if (s != null && s.getHost() != null && !MainActivity.isKnownDeadHost(s.getHost())) {
-                    String tag = obj.optString("tag");
-                    if (tag != null && !tag.isEmpty()) {
-                        s.setRemark(tag);
-                    }
-                    int delay = obj.optInt("delay", 80);
-                    s.setPingMs(delay);
-                    String key = s.getServerKey().toLowerCase(Locale.ROOT);
-                    if (!seenKeys.contains(key)) {
-                        seenKeys.add(key);
-                        combined.add(s);
-                    }
+        for (VpnServer s : combined) {
+            if (s == null) continue;
+            int score = getSniMobileScore(s.getSni(), s.getPort());
+            boolean isProven = MobileProvenConfigStorage.getInstance(ctx).isProven(s.getServerKey());
+            boolean isInWhitelist = isWhitelistedForMobile(s.getHost());
+
+            // Tier 1: Высшая вероятность (белый SNI РФ, wholebeam, cadrin, 144.hexdey, quick-frost, proven) - до 15 серверов
+            if (isProven || score >= 95) {
+                s.setMobileTier(1);
+                if (tier1.size() < 15) {
+                    tier1.add(s);
+                } else if (tier2.size() < 10) {
+                    s.setMobileTier(2);
+                    tier2.add(s);
+                } else {
+                    s.setMobileTier(3);
+                    tier3.add(s);
                 }
+            } else if (score >= 70 || isInWhitelist) {
+                s.setMobileTier(2);
+                if (tier2.size() < 10) {
+                    tier2.add(s);
+                } else {
+                    s.setMobileTier(3);
+                    tier3.add(s);
+                }
+            } else {
+                s.setMobileTier(3);
+                tier3.add(s);
             }
-        } catch (Throwable ignored) {}
+        }
+
+        // Сортировка внутри пулов по пингу / оценке
+        Collections.sort(tier1, new Comparator<VpnServer>() {
+            @Override
+            public int compare(VpnServer a, VpnServer b) {
+                int pA = (a.getPingMs() > 0) ? a.getPingMs() : 9999;
+                int pB = (b.getPingMs() > 0) ? b.getPingMs() : 9999;
+                if (pA != pB && pA != 9999 && pB != 9999) {
+                    // Both have verified measured pings: lower ping wins
+                    return Integer.compare(pA, pB);
+                }
+                int sA = getSniMobileScore(a.getSni(), a.getPort());
+                int sB = getSniMobileScore(b.getSni(), b.getPort());
+                if (sA != sB) return Integer.compare(sB, sA);
+                return Integer.compare(pA, pB);
+            }
+        });
+
+        Collections.sort(tier2, new Comparator<VpnServer>() {
+            @Override
+            public int compare(VpnServer a, VpnServer b) {
+                int pA = (a.getPingMs() > 0) ? a.getPingMs() : 9999;
+                int pB = (b.getPingMs() > 0) ? b.getPingMs() : 9999;
+                if (pA != pB && pA != 9999 && pB != 9999) {
+                    return Integer.compare(pA, pB);
+                }
+                int sA = getSniMobileScore(a.getSni(), a.getPort());
+                int sB = getSniMobileScore(b.getSni(), b.getPort());
+                if (sA != sB) return Integer.compare(sB, sA);
+                return Integer.compare(pA, pB);
+            }
+        });
+
+        List<VpnServer> sortedPool = new ArrayList<>(tier1.size() + tier2.size() + tier3.size());
+        sortedPool.addAll(tier1);
+        sortedPool.addAll(tier2);
+        sortedPool.addAll(tier3);
+
+        StringBuilder roster = new StringBuilder();
+        for (int i = 0; i < Math.min(tier1.size(), 6); i++) {
+            VpnServer t = tier1.get(i);
+            roster.append(t.getHost()).append(":").append(t.getPort()).append("(").append(t.getSni()).append(") ");
+        }
+
+        AppLogger.i(TAG, "📊 Assembled 3-Tier Mobile Bypass Pools: Tier 1 (High)=" + tier1.size()
+                + ", Tier 2 (Medium)=" + tier2.size()
+                + ", Tier 3 (Reserve)=" + tier3.size()
+                + " [Total=" + sortedPool.size() + " nodes]. Top Tier 1: " + roster.toString());
+
+        return sortedPool;
     }
 
     private static void parseBypassConfigLines(BufferedReader reader, List<VpnServer> out) throws Exception {
@@ -836,6 +996,11 @@ public class WhitelistPoolManager {
             if (s != null && s.getHost() != null && !s.getHost().equals("0.0.0.0") && !s.getHost().equals("127.0.0.1") && !ru.llazyrin.goblinvpn.MainActivity.isKnownDeadHost(s.getHost())) {
                 if (s.getRemark() == null || s.getRemark().isEmpty() || s.getRemark().equalsIgnoreCase(s.getHost())) {
                     s.setRemark("🇷🇺 Обход глушилок #" + idx);
+                }
+                int cachedPing = getCachedPing(s.getServerKey());
+                if (cachedPing > 0) {
+                    s.setPingMs(cachedPing);
+                    s.setAlive(true);
                 }
                 out.add(s);
                 idx++;

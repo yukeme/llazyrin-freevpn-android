@@ -76,9 +76,10 @@ public class AutoSwitchEngine {
     private static final long DATA_FLOW_IMMUNITY_BYTES = 8192L; // 8 KB rx delta protects active connection
     private static final long FAILED_SERVER_COOLDOWN_MS = 240000L; // 4 minutes
     private static final int STANDBY_POOL_SIZE = 3;
+    private static final long STANDBY_FRESHNESS_TTL_MS = 180_000L; // 3 minutes max cache validity
     private static final int BATCH_TEST_SIZE = 5;
     public static final int CELLULAR_WAVE_BATCH_SIZE = 5;
-    public static final int CELLULAR_WAVE_TIMEOUT_MS = 2500;
+    public static final int CELLULAR_WAVE_TIMEOUT_MS = 3800;
     public static final int CELLULAR_PRIMARY_WAVE_LIMIT = 20; // 4 waves of 5 servers = 20 candidates
 
     public enum NetworkProfile {
@@ -136,6 +137,9 @@ public class AutoSwitchEngine {
     private final List<VpnServer> candidateServers = new CopyOnWriteArrayList<>();
     private final List<VpnServer> standbyPool = new CopyOnWriteArrayList<>();
     private final List<VpnServer> verifiedCellularQueue = new CopyOnWriteArrayList<>();
+    private volatile long standbyPoolTimestampMs = 0L;
+    private volatile long verifiedQueueTimestampMs = 0L;
+    private volatile int standbyPoolCursor = 0;
     private final Map<String, Long> failedServerCooldowns = new ConcurrentHashMap<>();
     private final Map<String, Integer> serverFailureCounts = new ConcurrentHashMap<>();
     private final List<String> recentSwitchedServerKeys = Collections.synchronizedList(new ArrayList<String>());
@@ -405,6 +409,9 @@ public class AutoSwitchEngine {
     }
 
     public VpnServer peekVerifiedCellularServer() {
+        if ((SystemClock.elapsedRealtime() - verifiedQueueTimestampMs) > STANDBY_FRESHNESS_TTL_MS) {
+            return null;
+        }
         for (VpnServer s : verifiedCellularQueue) {
             if (s != null && s.getHost() != null
                     && !sessionHandshakeFailedKeys.contains(s.getServerKey().toLowerCase(Locale.ROOT))
@@ -423,6 +430,10 @@ public class AutoSwitchEngine {
      * Pops and returns the next fastest pre-verified server (#2 -> #3 -> ...) from the queue.
      */
     public synchronized VpnServer popVerifiedCellularServer() {
+        if ((SystemClock.elapsedRealtime() - verifiedQueueTimestampMs) > STANDBY_FRESHNESS_TTL_MS) {
+            verifiedCellularQueue.clear();
+            return null;
+        }
         while (!verifiedCellularQueue.isEmpty()) {
             VpnServer s = verifiedCellularQueue.remove(0);
             if (s == null || s.getHost() == null) continue;
@@ -516,7 +527,8 @@ public class AutoSwitchEngine {
                 penalizedTail.add(s);
             }
         }
-        if (preferred.isEmpty() && !penalizedTail.isEmpty()) {
+        // Always keep penalized/cooldown candidates in the tail so 5-server waves never starve to 1 node
+        if (!penalizedTail.isEmpty()) {
             preferred.addAll(penalizedTail);
         }
         return preferred;
@@ -589,6 +601,9 @@ public class AutoSwitchEngine {
                 // Enqueue #2, #3... in ascending speed order for instant 0ms failover
                 verifiedCellularQueue.clear();
                 standbyPool.clear();
+                long nowWaveTs = SystemClock.elapsedRealtime();
+                verifiedQueueTimestampMs = nowWaveTs;
+                standbyPoolTimestampMs = nowWaveTs;
                 for (int i = 1; i < waveAlive.size(); i++) {
                     VpnServer backup = waveAlive.get(i);
                     verifiedCellularQueue.add(backup);
@@ -919,18 +934,20 @@ public class AutoSwitchEngine {
 
                         if (GoblinVpnService.isExplicitUserDisconnect) return;
 
-                        boolean isAlreadyMobileBypass = false;
+                        boolean isAlreadyMobileProven = false;
                         VpnServer current = currentConnectedServer;
                         if (current != null) {
                             if (!"193.233.199.233".equals(current.getHost())
-                                    && WhitelistPoolManager.getInstance(appContext).isWhitelistedForMobile(current.getHost())) {
-                                isAlreadyMobileBypass = WhitelistPoolManager.getInstance(appContext).isServerWhitelistedOrTagged(current);
+                                    && WhitelistPoolManager.getInstance(appContext).isWhitelistedForMobile(current.getHost())
+                                    && WhitelistPoolManager.getInstance(appContext).isServerWhitelistedOrTagged(current)
+                                    && ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage.getInstance(appContext).isProven(current.getServerKey())) {
+                                isAlreadyMobileProven = true;
                             }
                         }
 
-                        if (!isAlreadyMobileBypass || isServerInCooldown(current.getServerKey()) || ServerPenaltyManager.getInstance(appContext).isPenalized(current.getServerKey())) {
+                        if (!isAlreadyMobileProven || isServerInCooldown(current.getServerKey()) || ServerPenaltyManager.getInstance(appContext).isPenalized(current.getServerKey())) {
                             AppLogger.i(TAG, "Active server [" + (current != null ? current.getDisplayName() : "Unknown")
-                                    + "] is not an active mobile bypass node. Launching 5-server cellular wave handover...");
+                                    + "] is not an already-proven cellular node. Launching 5-server cellular wave handover...");
                             VpnServer queued = popVerifiedCellularServer();
                             if (queued != null) {
                                 seamlessConnectToServer(queued, "Переключение Wi-Fi -> Сотовая связь (Queue)");
@@ -939,7 +956,7 @@ public class AutoSwitchEngine {
                                 seamlessConnectToWaveSearch("Переключение Wi-Fi -> Сотовая связь (волновой подбор)");
                             }
                         } else {
-                            AppLogger.i(TAG, "Active server is already a mobile bypass node. Seamlessly reconnecting over Cellular transport...");
+                            AppLogger.i(TAG, "Active server is proven on cellular. Seamlessly reconnecting over Cellular transport...");
                             seamlessConnectToServer(current, "Переключение Wi-Fi -> Сотовая связь (переподключение)");
                             triggerImmediateBenchmark();
                         }
@@ -1114,6 +1131,9 @@ public class AutoSwitchEngine {
     }
 
     public List<VpnServer> getStandbyPool() {
+        if (standbyPool.isEmpty() || (SystemClock.elapsedRealtime() - standbyPoolTimestampMs) > STANDBY_FRESHNESS_TTL_MS) {
+            return Collections.emptyList();
+        }
         return Collections.unmodifiableList(new ArrayList<>(standbyPool));
     }
 
@@ -1338,15 +1358,6 @@ public class AutoSwitchEngine {
                         return;
                     }
 
-                    long now = SystemClock.elapsedRealtime();
-
-                    // Очистка устаревших штрафов (старше 4 минут)
-                    for (Map.Entry<String, Long> entry : failedServerCooldowns.entrySet()) {
-                        if (now - entry.getValue() > FAILED_SERVER_COOLDOWN_MS) {
-                            failedServerCooldowns.remove(entry.getKey());
-                        }
-                    }
-
                     final VpnServer active = currentConnectedServer;
                     List<VpnServer> eligible = new ArrayList<>();
                     for (VpnServer s : allBypass) {
@@ -1354,8 +1365,7 @@ public class AutoSwitchEngine {
                         if (active != null && s.getServerKey().equalsIgnoreCase(active.getServerKey())) {
                             continue;
                         }
-                        Long cd = failedServerCooldowns.get(s.getServerKey());
-                        if (cd != null && (now - cd < FAILED_SERVER_COOLDOWN_MS)) {
+                        if (isServerInCooldown(s.getServerKey())) {
                             continue;
                         }
                         eligible.add(s);
@@ -1403,10 +1413,10 @@ public class AutoSwitchEngine {
                                             candidate.setAlive(true);
                                             batchAlive.add(candidate);
                                         } else {
-                                            failedServerCooldowns.put(candidate.getServerKey(), SystemClock.elapsedRealtime());
+                                            failedServerCooldowns.put(candidate.getServerKey(), SystemClock.elapsedRealtime() + 60_000L);
                                         }
                                     } catch (Exception ignored) {
-                                        failedServerCooldowns.put(candidate.getServerKey(), SystemClock.elapsedRealtime());
+                                        failedServerCooldowns.put(candidate.getServerKey(), SystemClock.elapsedRealtime() + 60_000L);
                                     } finally {
                                         latch.countDown();
                                     }
@@ -1436,6 +1446,7 @@ public class AutoSwitchEngine {
                                 + " [" + workingNode.getHost() + "] Ping=" + workingNode.getPingMs() + "ms");
 
                         standbyPool.clear();
+                        standbyPoolTimestampMs = SystemClock.elapsedRealtime();
                         for (int i = 0; i < Math.min(standbyCandidates.size(), STANDBY_POOL_SIZE); i++) {
                             standbyPool.add(standbyCandidates.get(i));
                         }
@@ -1491,7 +1502,6 @@ public class AutoSwitchEngine {
                 return;
             }
 
-            long now = SystemClock.elapsedRealtime();
             final VpnServer active = currentConnectedServer;
             List<VpnServer> filtered = new ArrayList<>();
             for (VpnServer s : poolCandidates) {
@@ -1499,20 +1509,18 @@ public class AutoSwitchEngine {
                 if (active != null && s.getServerKey().equalsIgnoreCase(active.getServerKey())) {
                     continue;
                 }
-                Long cd = failedServerCooldowns.get(s.getServerKey());
-                if (cd != null && (now - cd < FAILED_SERVER_COOLDOWN_MS)) {
+                if (isServerInCooldown(s.getServerKey())) {
                     continue;
                 }
                 filtered.add(s);
             }
 
             if (filtered.isEmpty()) {
-                failedServerCooldowns.clear();
                 filtered.addAll(poolCandidates);
             }
 
             int total = filtered.size();
-            int startIdx = (isCellular ? mobilePoolCursor : 0) % total;
+            int startIdx = (isCellular ? mobilePoolCursor : standbyPoolCursor) % total;
             int countToTest = Math.min(total, BATCH_TEST_SIZE); // 5 servers per wave
 
             final List<VpnServer> testBatch = new ArrayList<>();
@@ -1522,6 +1530,8 @@ public class AutoSwitchEngine {
 
             if (isCellular) {
                 mobilePoolCursor = (startIdx + countToTest) % total;
+            } else {
+                standbyPoolCursor = (startIdx + countToTest) % total;
             }
 
             List<VpnServer> aliveServers = ServerPinger.benchmarkBatchSync(testBatch, CELLULAR_WAVE_TIMEOUT_MS);
@@ -1529,8 +1539,11 @@ public class AutoSwitchEngine {
                 for (VpnServer alive : aliveServers) {
                     reportCommunityStats(alive, alive.getPingMs(), 0);
                 }
+                long nowBenchTs = SystemClock.elapsedRealtime();
                 standbyPool.clear();
+                standbyPoolTimestampMs = nowBenchTs;
                 if (isCellular) {
+                    verifiedQueueTimestampMs = nowBenchTs;
                     // Add fresh responsive cellular backups into verifiedCellularQueue (avoiding duplicates)
                     for (VpnServer alive : aliveServers) {
                         boolean dup = false;
@@ -1552,9 +1565,7 @@ public class AutoSwitchEngine {
                 AppLogger.i(TAG, "Standby Hot Pool refreshed (" + testBatch.size() + "-wide batch): standby=" + standbyPool.size()
                         + ", verifiedQueue=" + verifiedCellularQueue.size());
             } else {
-                for (VpnServer dead : testBatch) {
-                    failedServerCooldowns.put(dead.getServerKey(), SystemClock.elapsedRealtime() + 60_000L);
-                }
+                AppLogger.d(TAG, "Standby Hot Pool batch had 0 responsive nodes (" + testBatch.size() + " probed); cursor advanced.");
             }
 
         } catch (Exception e) {
@@ -1847,8 +1858,6 @@ public class AutoSwitchEngine {
         } catch (Exception e) {
             Log.e(TAG, "Failed to send auto-switch intent: " + e.getMessage(), e);
         }
-
-        reportCommunityStats(target, target.getPingMs(), 0);
     }
 
     private void reportCommunityStats(VpnServer server, int pingMs, long speedKbps) {

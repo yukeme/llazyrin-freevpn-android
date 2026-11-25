@@ -641,8 +641,28 @@ public class AutoSwitchEngine {
     }
 
     public synchronized void onInitialConnectFailed(VpnServer failedServer) {
-        int attempt = initialFailoverAttempts.incrementAndGet();
+        NetworkPreferences prefs = NetworkPreferences.getInstance(appContext);
         boolean isCellular = WhitelistPoolManager.isRunningOnCellular(appContext);
+
+        // If user selected a specific manual server AND disabled auto-switch, NEVER change servers!
+        if (!prefs.isAutoServerMode() && !prefs.isAutoSwitchServerEnabled()) {
+            AppLogger.w(TAG, "🔒 Manual server [" + (failedServer != null ? failedServer.getDisplayName() : "unknown")
+                    + "] failed handshake with Auto-Switch OFF. Respecting pinned selection (not switching).");
+            GoblinVpnService.onPinnedConnectionFailed(failedServer,
+                    "Сервер " + (failedServer != null ? failedServer.getDisplayName() : "") + " не отвечает (автопереключение выключено)");
+            return;
+        }
+
+        // If Auto-Switch is disabled globally while in Auto mode, allow initial fallback ONLY on cellular
+        // so first discovery can recover a dead sticky node, otherwise stop cleanly
+        if (!prefs.isAutoSwitchServerEnabled() && !isCellular) {
+            AppLogger.w(TAG, "🔒 Auto-Switch disabled on Wi-Fi: not switching away from selected server.");
+            GoblinVpnService.onPinnedConnectionFailed(failedServer,
+                    "Не удалось подключиться к " + (failedServer != null ? failedServer.getDisplayName() : "серверу") + " (автопереключение выключено)");
+            return;
+        }
+
+        int attempt = initialFailoverAttempts.incrementAndGet();
 
         if (failedServer != null) {
             recordServerFailure(failedServer.getServerKey());
@@ -934,8 +954,17 @@ public class AutoSwitchEngine {
 
                         if (GoblinVpnService.isExplicitUserDisconnect) return;
 
-                        boolean isAlreadyMobileProven = false;
+                        NetworkPreferences handoverPrefs = NetworkPreferences.getInstance(appContext);
                         VpnServer current = currentConnectedServer;
+
+                        // Respect manual pinned server when Auto-Switch is OFF
+                        if (!handoverPrefs.isAutoServerMode() && !handoverPrefs.isAutoSwitchServerEnabled() && current != null) {
+                            AppLogger.i(TAG, "🔒 Network switched to Cellular, but manual server is pinned with Auto-Switch OFF. Reconnecting to same node: " + current.getDisplayName());
+                            seamlessConnectToServer(current, "Переключение сети (выбранный узел закреплён)");
+                            return;
+                        }
+
+                        boolean isAlreadyMobileProven = false;
                         if (current != null) {
                             if (!"193.233.199.233".equals(current.getHost())
                                     && WhitelistPoolManager.getInstance(appContext).isWhitelistedForMobile(current.getHost())
@@ -946,19 +975,33 @@ public class AutoSwitchEngine {
                         }
 
                         if (!isAlreadyMobileProven || isServerInCooldown(current.getServerKey()) || ServerPenaltyManager.getInstance(appContext).isPenalized(current.getServerKey())) {
+                            // Prefer sticky remembered cellular node before starting new wave scan!
+                            VpnServer sticky = null;
+                            try {
+                                sticky = ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage.getInstance(appContext).getStickyMobileServer();
+                            } catch (Throwable ignored) {}
+                            if (sticky != null && !isServerInCooldown(sticky.getServerKey()) && !ServerPenaltyManager.getInstance(appContext).isPenalized(sticky.getServerKey())) {
+                                AppLogger.i(TAG, "⚡ [StickyMobile] Wi-Fi -> Cellular handover reusing remembered node: " + sticky.getDisplayName());
+                                seamlessConnectToServer(sticky, "Переключение Wi-Fi -> Сотовая связь (сохранённый узел)");
+                                return;
+                            }
+
+                            if (!handoverPrefs.isAutoSwitchServerEnabled() && current != null) {
+                                // Auto-Switch is OFF and no sticky mobile node saved yet: if current is usable, keep it
+                                AppLogger.i(TAG, "🔒 Auto-Switch OFF during handover; keeping current node or single wave fallback.");
+                            }
+
                             AppLogger.i(TAG, "Active server [" + (current != null ? current.getDisplayName() : "Unknown")
                                     + "] is not an already-proven cellular node. Launching 5-server cellular wave handover...");
                             VpnServer queued = popVerifiedCellularServer();
                             if (queued != null) {
                                 seamlessConnectToServer(queued, "Переключение Wi-Fi -> Сотовая связь (Queue)");
-                                triggerImmediateBenchmark();
                             } else {
                                 seamlessConnectToWaveSearch("Переключение Wi-Fi -> Сотовая связь (волновой подбор)");
                             }
                         } else {
                             AppLogger.i(TAG, "Active server is proven on cellular. Seamlessly reconnecting over Cellular transport...");
                             seamlessConnectToServer(current, "Переключение Wi-Fi -> Сотовая связь (переподключение)");
-                            triggerImmediateBenchmark();
                         }
                     } catch (Throwable t) {
                         Log.e(TAG, "Error in Cellular handover: " + t.getMessage(), t);
@@ -1006,10 +1049,14 @@ public class AutoSwitchEngine {
                     boolean isCellular = WhitelistPoolManager.isRunningOnCellular(appContext);
 
                     VpnServer target = null;
+                    VpnServer curActive = currentConnectedServer;
 
-                    // 1. If user selected a specific server and not in auto mode, use that (strictly unless cellular blocks it)
-                    if (!prefs.isAutoServerMode() && selectedHost != null && candidateServers != null) {
-                        if (!isCellular || (!"193.233.199.233".equals(selectedHost) && WhitelistPoolManager.getInstance(appContext).isWhitelistedForMobile(selectedHost))) {
+                    // 1. Strictly respect user's manual selected server (especially when Auto-Switch is OFF)
+                    if (!prefs.isAutoServerMode()) {
+                        if (curActive != null && (selectedHost == null || selectedHost.equalsIgnoreCase(curActive.getHost()))) {
+                            target = curActive;
+                        }
+                        if (target == null && selectedHost != null && candidateServers != null) {
                             for (VpnServer s : candidateServers) {
                                 if (s != null && selectedHost.equalsIgnoreCase(s.getHost()) && !MainActivity.isKnownDeadHost(s.getHost())) {
                                     target = s;
@@ -1017,9 +1064,17 @@ public class AutoSwitchEngine {
                                 }
                             }
                         }
+                        if (target == null && !prefs.isAutoSwitchServerEnabled()) {
+                            return;
+                        }
                     }
 
-                    // 2. On Cellular network: STRICTLY prioritize Mobile Bypass Pool
+                    // 2. If Auto-Switch is OFF in Auto Mode and current server already works, keep it cleanly
+                    if (target == null && !prefs.isAutoSwitchServerEnabled() && curActive != null) {
+                        target = curActive;
+                    }
+
+                    // 3. On Cellular network: STRICTLY prioritize Sticky/Mobile Bypass Pool
                     if (target == null && isCellular) {
                         List<VpnServer> bypass = WhitelistPoolManager.getInstance(appContext).getMobileBypassServerPool(appContext);
                         List<VpnServer> candidates = new ArrayList<>();
@@ -1035,7 +1090,7 @@ public class AutoSwitchEngine {
                             }
                         }
                         if (!candidates.isEmpty()) {
-                            target = ServerPinger.preflightTelegramPingSync(candidates, 2500);
+                            target = ServerPinger.preflightTelegramPingSync(candidates, CELLULAR_WAVE_TIMEOUT_MS);
                             if (target == null) target = candidates.get(0);
                         }
                         if (target == null && bypass != null && !bypass.isEmpty()) {
@@ -1167,7 +1222,21 @@ public class AutoSwitchEngine {
      * или непредвиденном завершении цикла Xray.
      */
     public synchronized void onTunnelDroppedUnexpectedly(VpnServer failedServer, String reason) {
+        NetworkPreferences prefs = NetworkPreferences.getInstance(appContext);
         boolean isCellular = WhitelistPoolManager.isRunningOnCellular(appContext);
+
+        // If Auto-Switch is OFF or user locked a manual server with Auto-Switch OFF, never switch servers!
+        if (!prefs.isAutoSwitchServerEnabled()) {
+            AppLogger.w(TAG, "🔒 Tunnel dropped with Auto-Switch OFF; not switching servers.");
+            if (!prefs.isAutoServerMode() && failedServer != null) {
+                GoblinVpnService.onPinnedConnectionFailed(failedServer,
+                        "Соединение разорвано на " + failedServer.getDisplayName() + " (автопереключение выключено)");
+            } else {
+                GoblinVpnService.onPinnedConnectionFailed(failedServer,
+                        "Соединение разорвано (автопереключение выключено)");
+            }
+            return;
+        }
         if (failedServer != null) {
             recordServerFailure(failedServer.getServerKey());
             recordSwitchedServer(failedServer.getServerKey());
@@ -1267,9 +1336,9 @@ public class AutoSwitchEngine {
             }
         }, BENCHMARK_INTERVAL_SECONDS, BENCHMARK_INTERVAL_SECONDS, TimeUnit.SECONDS);
 
-        // 2. Периодическая проверка качества соединения
+        // 2. Периодическая проверка качества соединения только при включённом автопереключении
         NetworkPreferences prefs = NetworkPreferences.getInstance(appContext);
-        if (prefs.isAutoSwitchServerEnabled() || WhitelistPoolManager.isRunningOnCellular(appContext)) {
+        if (prefs.isAutoSwitchServerEnabled()) {
             startHealthCheckSchedule();
         }
 
@@ -1475,12 +1544,22 @@ public class AutoSwitchEngine {
      * Фоновый бенчмарк: тестирует доступные узлы и обновляет горячий резерв (Hot Standby).
      */
     private void runStandbyBenchmark() {
+        NetworkPreferences prefs = NetworkPreferences.getInstance(appContext);
+        if (!prefs.isAutoSwitchServerEnabled()) {
+            return; // Zero background benchmarking when Auto-Switch is OFF
+        }
+
         if (!isBenchmarking.compareAndSet(false, true)) {
             return;
         }
 
         try {
             boolean isCellular = WhitelistPoolManager.isRunningOnCellular(appContext);
+            // Save cellular data & battery: never run continuous 5-node background sweeps while connected on mobile!
+            if (isCellular && GoblinVpnService.getCurrentState() == VpnState.CONNECTED) {
+                AppLogger.d(TAG, "Skipping periodic standby benchmark on cellular while tunnel is connected (saving mobile traffic).");
+                return;
+            }
             List<VpnServer> poolCandidates = new ArrayList<>();
 
             // 1. Всегда первично включаем 28 проверенных нод обхода глушилок (работают и на Wi-Fi, и на LTE)
@@ -1634,7 +1713,7 @@ public class AutoSwitchEngine {
         }
 
         NetworkPreferences prefs = NetworkPreferences.getInstance(appContext);
-        if (!prefs.isAutoSwitchServerEnabled() && !isCellular) {
+        if (!prefs.isAutoSwitchServerEnabled()) {
             return;
         }
 
@@ -1744,6 +1823,10 @@ public class AutoSwitchEngine {
      * Бесшовное переключение на лучший узел горячего пула без сброса UI-состояния.
      */
     private synchronized void triggerAutoSwitch(String reason) {
+        if (!NetworkPreferences.getInstance(appContext).isAutoSwitchServerEnabled()) {
+            AppLogger.d(TAG, "Auto-switch suppressed because toggle is disabled (" + reason + ")");
+            return;
+        }
         lastSwitchTimestampMs = SystemClock.elapsedRealtime();
         consecutiveDegradationCount = 0;
         consecutiveDropCount = 0;

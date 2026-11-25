@@ -66,6 +66,7 @@ public class GoblinVpnService extends VpnService {
 
     public static final String EXTRA_SERVER = "extra_server";
     public static final String EXTRA_STATE = "extra_state";
+    public static final String EXTRA_ERROR_MESSAGE = "extra_error_message";
     public static final String EXTRA_RESTRICTED_TELEGRAM_ONLY = "extra_restricted_telegram_only";
     public static final String EXTRA_AUTO_WAVE_SELECT = "extra_auto_wave_select";
 
@@ -901,6 +902,41 @@ public class GoblinVpnService extends VpnService {
         }
         closeVpnInterface();
         releaseWakeLocks();
+    }
+
+    /**
+     * Cleanly terminates the VPN connection attempt in ERROR state without switching servers
+     * (used when auto-switch is disabled or manual server is locked).
+     */
+    public static void onPinnedConnectionFailed(final VpnServer failedServer, final String errorMessage) {
+        final GoblinVpnService svc = activeInstance;
+        if (svc == null) return;
+        svc.isRunning = false;
+        connectionStageHint = null;
+        svc.activeSessionId.incrementAndGet();
+        svc.stopForegroundNotification();
+        svc.releaseWakeLocks();
+        currentServer = failedServer;
+        svc.updateState(VpnState.ERROR);
+        if (errorMessage != null && !errorMessage.isEmpty()) {
+            try {
+                Intent broadcast = new Intent(ACTION_STATE_CHANGED);
+                broadcast.setPackage(svc.getPackageName());
+                broadcast.putExtra(EXTRA_STATE, VpnState.ERROR.name());
+                broadcast.putExtra(EXTRA_ERROR_MESSAGE, errorMessage);
+                if (failedServer != null) {
+                    broadcast.putExtra(EXTRA_SERVER, failedServer);
+                }
+                svc.sendBroadcast(broadcast);
+            } catch (Exception ignored) {}
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                svc.stopTunnel();
+                svc.stopSelf();
+            }
+        }, "GoblinVpn-PinnedFail").start();
     }
 
     /**

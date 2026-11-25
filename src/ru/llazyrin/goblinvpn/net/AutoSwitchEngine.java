@@ -76,7 +76,10 @@ public class AutoSwitchEngine {
     private static final long DATA_FLOW_IMMUNITY_BYTES = 8192L; // 8 KB rx delta protects active connection
     private static final long FAILED_SERVER_COOLDOWN_MS = 240000L; // 4 minutes
     private static final int STANDBY_POOL_SIZE = 3;
-    private static final int BATCH_TEST_SIZE = 8;
+    private static final int BATCH_TEST_SIZE = 5;
+    public static final int CELLULAR_WAVE_BATCH_SIZE = 5;
+    public static final int CELLULAR_WAVE_TIMEOUT_MS = 2500;
+    public static final int CELLULAR_PRIMARY_WAVE_LIMIT = 20; // 4 waves of 5 servers = 20 candidates
 
     public enum NetworkProfile {
         WIFI("Wi-Fi", 250, 300),
@@ -132,6 +135,7 @@ public class AutoSwitchEngine {
 
     private final List<VpnServer> candidateServers = new CopyOnWriteArrayList<>();
     private final List<VpnServer> standbyPool = new CopyOnWriteArrayList<>();
+    private final List<VpnServer> verifiedCellularQueue = new CopyOnWriteArrayList<>();
     private final Map<String, Long> failedServerCooldowns = new ConcurrentHashMap<>();
     private final Map<String, Integer> serverFailureCounts = new ConcurrentHashMap<>();
     private final List<String> recentSwitchedServerKeys = Collections.synchronizedList(new ArrayList<String>());
@@ -358,16 +362,267 @@ public class AutoSwitchEngine {
      * User-initiated connection: clears previous temporary failure states, session exclusions,
      * and server penalties so fresh connection attempt is never starved.
      */
+    public interface WaveProgressListener {
+        void onWaveProgress(int waveIndex, int totalWaves, int batchSize);
+    }
+
     public synchronized void notifyUserInitiatedConnect() {
         initialFailoverAttempts.set(0);
         sessionHandshakeFailedKeys.clear();
         recentSwitchedServerKeys.clear();
         failedServerCooldowns.clear();
         serverFailureCounts.clear();
+        verifiedCellularQueue.clear();
         try {
             ServerPenaltyManager.getInstance(appContext).resetAll();
         } catch (Throwable ignored) {}
-        AppLogger.i(TAG, "⚡ User initiated connect: reset failover counters and penalties.");
+        AppLogger.i(TAG, "⚡ User initiated connect: reset failover counters, queue, and penalties.");
+    }
+
+    /**
+     * Checks whether a verified working server is already queued from an earlier 5-server wave.
+     * Non-blocking; returns null if wave discovery should run.
+     */
+    /**
+     * Non-blocking fallback selector for non-cellular routes when intent had null EXTRA_SERVER.
+     */
+    public VpnServer selectFallbackNonCellularServer() {
+        while (!standbyPool.isEmpty()) {
+            VpnServer cand = standbyPool.remove(0);
+            if (cand != null && !MainActivity.isKnownDeadHost(cand.getHost())) {
+                return cand;
+            }
+        }
+        try {
+            List<VpnServer> comm = CommunityPoolManager.getInstance(appContext).getTopCommunityServers();
+            if (comm != null && !comm.isEmpty()) {
+                for (VpnServer s : comm) {
+                    if (s != null && !MainActivity.isKnownDeadHost(s.getHost())) return s;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return pickNextEligibleCandidate(null);
+    }
+
+    public VpnServer peekVerifiedCellularServer() {
+        for (VpnServer s : verifiedCellularQueue) {
+            if (s != null && s.getHost() != null
+                    && !sessionHandshakeFailedKeys.contains(s.getServerKey().toLowerCase(Locale.ROOT))
+                    && !MainActivity.isKnownDeadHost(s.getHost())
+                    && !WhitelistPoolManager.isBlockedMobileHost(s.getHost())
+                    && !WhitelistPoolManager.isBlockedMobileSni(s.getSni())
+                    && !isServerInCooldown(s.getServerKey())
+                    && !ServerPenaltyManager.getInstance(appContext).isPenalized(s.getServerKey())) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Pops and returns the next fastest pre-verified server (#2 -> #3 -> ...) from the queue.
+     */
+    public synchronized VpnServer popVerifiedCellularServer() {
+        while (!verifiedCellularQueue.isEmpty()) {
+            VpnServer s = verifiedCellularQueue.remove(0);
+            if (s == null || s.getHost() == null) continue;
+            String k = s.getServerKey().toLowerCase(Locale.ROOT);
+            if (sessionHandshakeFailedKeys.contains(k)
+                    || MainActivity.isKnownDeadHost(s.getHost())
+                    || WhitelistPoolManager.isBlockedMobileHost(s.getHost())
+                    || WhitelistPoolManager.isBlockedMobileSni(s.getSni())
+                    || isServerInCooldown(s.getServerKey())
+                    || ServerPenaltyManager.getInstance(appContext).isPenalized(s.getServerKey())) {
+                continue;
+            }
+            AppLogger.i(TAG, "⚡ [Wave Queue] Instant #next switch (0ms ping): " + s.getDisplayName()
+                    + " [" + s.getHost() + ":" + s.getPort() + "] (SNI=" + s.getSni() + ", ping=" + s.getPingMs() + "ms)");
+            return s;
+        }
+        return null;
+    }
+
+    private void addUniqueCellularCandidate(VpnServer s, List<VpnServer> dest, Set<String> seenKeys, Set<String> excludedLowerKeys) {
+        if (s == null || s.getHost() == null) return;
+        String host = s.getHost();
+        if ("193.233.199.233".equals(host)
+                || MainActivity.isKnownDeadHost(host)
+                || WhitelistPoolManager.isBlockedMobileHost(host)
+                || WhitelistPoolManager.isBlockedMobileSni(s.getSni())) {
+            return;
+        }
+        if (!WhitelistPoolManager.getInstance(appContext).isServerWhitelistedOrTagged(s)) {
+            return;
+        }
+        String keyLower = s.getServerKey().toLowerCase(Locale.ROOT);
+        if (excludedLowerKeys != null && excludedLowerKeys.contains(keyLower)) {
+            return;
+        }
+        if (seenKeys.add(keyLower)) {
+            dest.add(s);
+        }
+    }
+
+    /**
+     * Assembles an ordered, deduplicated list of cellular bypass candidates:
+     * 1) Proven cellular servers on this device
+     * 2) Whitelisted community top servers
+     * 3) Verified 3-tier mobile bypass pool
+     */
+    public List<VpnServer> assembleCellularCandidateOrder(Set<String> extraExcluded) {
+        List<VpnServer> preferred = new ArrayList<>();
+        List<VpnServer> penalizedTail = new ArrayList<>();
+        List<VpnServer> allRaw = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+
+        Set<String> excluded = new HashSet<>();
+        synchronized (sessionHandshakeFailedKeys) {
+            excluded.addAll(sessionHandshakeFailedKeys);
+        }
+        if (extraExcluded != null) {
+            for (String ek : extraExcluded) {
+                if (ek != null) excluded.add(ek.toLowerCase(Locale.ROOT));
+            }
+        }
+
+        // 1. MobileProvenConfigStorage (previously working on this device)
+        try {
+            List<VpnServer> proven = MobileProvenConfigStorage.getInstance(appContext).getProvenMobileServers();
+            if (proven != null) {
+                for (VpnServer ps : proven) addUniqueCellularCandidate(ps, allRaw, seen, excluded);
+            }
+        } catch (Throwable ignored) {}
+
+        // 2. Community top servers matching mobile whitelist
+        try {
+            List<VpnServer> comm = CommunityPoolManager.getInstance(appContext).getTopCommunityServers();
+            if (comm != null) {
+                for (VpnServer cs : comm) addUniqueCellularCandidate(cs, allRaw, seen, excluded);
+            }
+        } catch (Throwable ignored) {}
+
+        // 3. 3-Tier Mobile Bypass Pool
+        try {
+            List<VpnServer> bypass = WhitelistPoolManager.getInstance(appContext).getMobileBypassServerPool(appContext);
+            if (bypass != null) {
+                for (VpnServer bs : bypass) addUniqueCellularCandidate(bs, allRaw, seen, excluded);
+            }
+        } catch (Throwable ignored) {}
+
+        for (VpnServer s : allRaw) {
+            if (!isServerInCooldown(s.getServerKey()) && !ServerPenaltyManager.getInstance(appContext).isPenalized(s.getServerKey())) {
+                preferred.add(s);
+            } else {
+                penalizedTail.add(s);
+            }
+        }
+        if (preferred.isEmpty() && !penalizedTail.isEmpty()) {
+            preferred.addAll(penalizedTail);
+        }
+        return preferred;
+    }
+
+    /**
+     * Selects the fastest working cellular bypass node using parallel 5-server waves via Telegram / In-Tunnel API:
+     * - First returns any pre-probed #2/#3 server waiting in verifiedCellularQueue (0 ms delay).
+     * - Otherwise probes candidates in waves of 5 concurrently (up to 4 primary waves = 20 servers, continuing if needed).
+     * - Within a successful wave, picks the fastest #1 node AND queues #2, #3... in verifiedCellularQueue for instant failover!
+     */
+    public VpnServer selectCellularServerByWaves(Set<String> extraExcluded, WaveProgressListener listener, AtomicBoolean cancelFlag) {
+        // 0. Check pre-verified queue from previous wave (#2 -> #3 -> ...)
+        VpnServer queued = popVerifiedCellularServer();
+        if (queued != null) {
+            return queued;
+        }
+
+        List<VpnServer> candidates = assembleCellularCandidateOrder(extraExcluded);
+        if (candidates.isEmpty()) {
+            // Reset session exclusions if everything in pool has already been tried
+            AppLogger.i(TAG, "⚡ All cellular candidates excluded this session; resetting exclusions for fresh wave sweep.");
+            sessionHandshakeFailedKeys.clear();
+            failedServerCooldowns.clear();
+            candidates = assembleCellularCandidateOrder(extraExcluded);
+        }
+        if (candidates.isEmpty()) {
+            return null;
+        }
+
+        int totalPrimary = Math.min(candidates.size(), CELLULAR_PRIMARY_WAVE_LIMIT);
+        int totalWaves = Math.max(1, (totalPrimary + CELLULAR_WAVE_BATCH_SIZE - 1) / CELLULAR_WAVE_BATCH_SIZE);
+
+        // Run up to totalPrimary in batches of 5 (then overflow if all primary failed)
+        int maxScan = candidates.size();
+        for (int offset = 0; offset < maxScan; offset += CELLULAR_WAVE_BATCH_SIZE) {
+            if ((cancelFlag != null && cancelFlag.get()) || GoblinVpnService.isExplicitUserDisconnect) {
+                AppLogger.i(TAG, "⚡ Wave selection aborted (user disconnected or superseded).");
+                return null;
+            }
+
+            int end = Math.min(offset + CELLULAR_WAVE_BATCH_SIZE, maxScan);
+            List<VpnServer> wave = new ArrayList<>(candidates.subList(offset, end));
+            int waveIdx = (offset / CELLULAR_WAVE_BATCH_SIZE) + 1;
+            int displayTotal = (offset < totalPrimary) ? totalWaves : Math.max(waveIdx, (maxScan + CELLULAR_WAVE_BATCH_SIZE - 1) / CELLULAR_WAVE_BATCH_SIZE);
+
+            if (listener != null) {
+                try {
+                    listener.onWaveProgress(waveIdx, displayTotal, wave.size());
+                } catch (Throwable ignored) {}
+            }
+
+            StringBuilder targetsDesc = new StringBuilder();
+            for (int i = 0; i < wave.size(); i++) {
+                VpnServer w = wave.get(i);
+                if (i > 0) targetsDesc.append(", ");
+                targetsDesc.append(w.getHost()).append(":").append(w.getPort()).append("(").append(w.getSni()).append(")");
+            }
+            AppLogger.i(TAG, "📡 [Wave " + waveIdx + "/" + displayTotal + "] Pinging batch of " + wave.size()
+                    + " cellular nodes via Telegram API: [" + targetsDesc.toString() + "]");
+
+            List<VpnServer> waveAlive = ServerPinger.benchmarkBatchSync(wave, CELLULAR_WAVE_TIMEOUT_MS);
+
+            if ((cancelFlag != null && cancelFlag.get()) || GoblinVpnService.isExplicitUserDisconnect) {
+                return null;
+            }
+
+            if (!waveAlive.isEmpty()) {
+                VpnServer winner = waveAlive.get(0);
+                // Enqueue #2, #3... in ascending speed order for instant 0ms failover
+                verifiedCellularQueue.clear();
+                standbyPool.clear();
+                for (int i = 1; i < waveAlive.size(); i++) {
+                    VpnServer backup = waveAlive.get(i);
+                    verifiedCellularQueue.add(backup);
+                    if (standbyPool.size() < STANDBY_POOL_SIZE) {
+                        standbyPool.add(backup);
+                    }
+                }
+                StringBuilder winDesc = new StringBuilder();
+                for (int i = 0; i < waveAlive.size(); i++) {
+                    if (i > 0) winDesc.append(", ");
+                    VpnServer a = waveAlive.get(i);
+                    winDesc.append("#").append(i + 1).append(" ").append(a.getHost()).append("(").append(a.getPingMs()).append("ms)");
+                }
+                AppLogger.i(TAG, "✅ [Wave " + waveIdx + "/" + displayTotal + "] Alive: " + waveAlive.size() + "/" + wave.size()
+                        + " -> Selected Winner: " + winner.getDisplayName() + " [" + winDesc.toString() + "]");
+                return winner;
+            }
+
+            // Record cooldown/session skip for the 5 failed nodes in this wave so failover advances
+            for (VpnServer dead : wave) {
+                if (dead != null) {
+                    sessionHandshakeFailedKeys.add(dead.getServerKey().toLowerCase(Locale.ROOT));
+                    failedServerCooldowns.put(dead.getServerKey(), SystemClock.elapsedRealtime() + 60_000L);
+                }
+            }
+            AppLogger.w(TAG, "⚠️ [Wave " + waveIdx + "/" + displayTotal + "] 0/" + wave.size()
+                    + " responded; advancing immediately to next batch of 5...");
+        }
+
+        // All waves failed probe — emergency fallback to top unprobed candidate
+        VpnServer fallback = candidates.get(0);
+        AppLogger.w(TAG, "⚠️ All waves returned 0 alive via preflight; falling back to top candidate: "
+                + fallback.getDisplayName() + " [" + fallback.getHost() + "]");
+        return fallback;
     }
 
     public synchronized void onInitialConnectFailed(VpnServer failedServer) {
@@ -405,117 +660,21 @@ public class AutoSwitchEngine {
 
         if (isCellular) {
             // =========================================================================
-            // НА СОТОВОЙ СВЯЗИ: Строгая 4-уровневая иерархия подбора кандидатов
-            // Tier 0: Проверенные ранее работавшие конфиги (MobileProvenConfigStorage)
-            // Tier 1: Серверы от сообщества, проходящие белый список CIDR
-            // Tier 2: Топовые высоковероятные конфиги (getMobileBypassServerPool Tier 1)
-            // Tier 3: Резервные конфиги из белого пула
+            // НА СОТОВОЙ СВЯЗИ (Build 67):
+            // 1. Сначала мгновенно (0 мс) берем #2/#3 из уже пропингованной 5-серверной волны
+            // 2. Если очередь волны пуста — запускаем следующую волну по 5 серверов через Telegram API
             // =========================================================================
-
-            // --- Tier 0: Ранее успешно работавшие на сотовой связи ---
-            try {
-                List<VpnServer> provenList = MobileProvenConfigStorage.getInstance(appContext).getProvenMobileServers();
-                if (provenList != null && !provenList.isEmpty()) {
-                    for (VpnServer ps : provenList) {
-                        if (ps != null && ps.getHost() != null) {
-                            String k = ps.getServerKey().toLowerCase(Locale.ROOT);
-                            if (!sessionHandshakeFailedKeys.contains(k)
-                                    && !MainActivity.isKnownDeadHost(ps.getHost())) {
-                                next = ps;
-                                AppLogger.i(TAG, "⚡ [Tier 0] Cellular initial failover selected next proven node: "
-                                        + ps.getDisplayName() + " [" + ps.getHost() + ":" + ps.getPort() + "] (SNI=" + ps.getSni() + ")");
-                                break;
-                            }
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                AppLogger.w(TAG, "Error checking Tier 0 proven servers: " + t.getMessage());
+            next = popVerifiedCellularServer();
+            if (next != null) {
+                AppLogger.i(TAG, "⚡ [Wave Failover #" + attempt + "] Switching immediately (0ms) to queued #next server: "
+                        + next.getDisplayName() + " [" + next.getHost() + "] (" + next.getPingMs() + "ms)");
+                seamlessConnectToServer(next, "Резервный узел из волны (попытка " + attempt + ")");
+                triggerImmediateBenchmark();
+            } else {
+                AppLogger.i(TAG, "⚡ [Wave Failover #" + attempt + "] Verified queue exhausted; launching next 5-server Telegram wave probe...");
+                seamlessConnectToWaveSearch("Подбор следующей 5-ки серверов (попытка " + attempt + ")");
             }
-
-            // --- Tier 1: Серверы от сообщества, входящие в белый список сотовых CIDR ---
-            if (next == null) {
-                try {
-                    List<VpnServer> community = CommunityPoolManager.getInstance(appContext).getTopCommunityServers();
-                    if (community != null && !community.isEmpty()) {
-                        for (VpnServer cs : community) {
-                            if (cs != null && cs.getHost() != null) {
-                                String k = cs.getServerKey().toLowerCase(Locale.ROOT);
-                                if (!sessionHandshakeFailedKeys.contains(k)
-                                        && !"193.233.199.233".equals(cs.getHost())
-                                        && WhitelistPoolManager.getInstance(appContext).isWhitelistedForMobile(cs.getHost())
-                                        && !isServerInCooldown(cs.getServerKey())
-                                        && !ServerPenaltyManager.getInstance(appContext).isPenalized(cs.getServerKey())
-                                        && !MainActivity.isKnownDeadHost(cs.getHost())) {
-                                    next = cs;
-                                    AppLogger.i(TAG, "⚡ [Tier 1] Cellular initial failover selected whitelisted community node: "
-                                            + cs.getDisplayName() + " [" + cs.getHost() + ":" + cs.getPort() + "] (SNI=" + cs.getSni() + ")");
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                } catch (Throwable t) {
-                    AppLogger.w(TAG, "Error checking Tier 1 community servers: " + t.getMessage());
-                }
-            }
-
-            // --- Tier 2 & 3: Перебор пула мобильного обхода (Tier 1/2/3) ---
-            if (next == null) {
-                List<VpnServer> bypass = WhitelistPoolManager.getInstance(appContext).getMobileBypassServerPool(appContext);
-                if (bypass != null && !bypass.isEmpty()) {
-                    // Pass A: без штрафов, не в кулдауне, не в sessionHandshakeFailedKeys
-                    for (VpnServer c : bypass) {
-                        if (c != null && c.getHost() != null) {
-                            String k = c.getServerKey().toLowerCase(Locale.ROOT);
-                            if (!sessionHandshakeFailedKeys.contains(k)
-                                    && !isServerInCooldown(c.getServerKey())
-                                    && !ServerPenaltyManager.getInstance(appContext).isPenalized(c.getServerKey())
-                                    && !isRecentlySwitched(c.getServerKey())
-                                    && !MainActivity.isKnownDeadHost(c.getHost())) {
-                                next = c;
-                                AppLogger.i(TAG, "⚡ [Tier 2] Cellular initial failover selected verified mobile bypass node: "
-                                        + c.getDisplayName() + " [" + c.getHost() + ":" + c.getPort() + "] (Tier=" + c.getMobileTier() + ", SNI=" + c.getSni() + ")");
-                                break;
-                            }
-                        }
-                    }
-                    // Pass B: расслабляем штрафы/недавнее переключение, но СТРОГО не повторяем sessionHandshakeFailedKeys
-                    if (next == null) {
-                        for (VpnServer c : bypass) {
-                            if (c != null && c.getHost() != null) {
-                                String k = c.getServerKey().toLowerCase(Locale.ROOT);
-                                if (!sessionHandshakeFailedKeys.contains(k)
-                                        && !MainActivity.isKnownDeadHost(c.getHost())) {
-                                    next = c;
-                                    AppLogger.i(TAG, "⚡ [Tier 3] Cellular initial failover selected mobile bypass node (relaxed): "
-                                            + c.getDisplayName() + " [" + c.getHost() + ":" + c.getPort() + "] (Tier=" + c.getMobileTier() + ", SNI=" + c.getSni() + ")");
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // Pass C: если все узлы пула уже были опробованы в этой сессии — очищаем историю для нового круга
-                    if (next == null) {
-                        AppLogger.i(TAG, "All mobile bypass nodes attempted this session (" + sessionHandshakeFailedKeys.size()
-                                + " nodes). Clearing session exclusions to cycle again across Tier 1 -> Tier 2 -> Tier 3.");
-                        sessionHandshakeFailedKeys.clear();
-                        failedServerCooldowns.clear();
-                        for (VpnServer c : bypass) {
-                            if (c != null && c.getHost() != null && !MainActivity.isKnownDeadHost(c.getHost())) {
-                                String k = c.getServerKey().toLowerCase(Locale.ROOT);
-                                if (failedServer == null || !k.equalsIgnoreCase(failedServer.getServerKey())) {
-                                    next = c;
-                                    AppLogger.i(TAG, "⚡ Cellular initial failover (fresh cycle): selected "
-                                            + c.getDisplayName() + " [" + c.getHost() + ":" + c.getPort() + "] (Tier=" + c.getMobileTier() + ", SNI=" + c.getSni() + ")");
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            return;
         } else {
             // =========================================================================
             // НА WI-FI / ETHERNET: Выбор из горячего standbyPool и Community Top
@@ -739,8 +898,9 @@ public class AutoSwitchEngine {
     public synchronized void onNetworkSwitchedToCellular() {
         AppLogger.i(TAG, "⚡ onNetworkSwitchedToCellular() invoked! Checking active VPN connection state...");
 
-        // 1. Очищаем резервный пул
+        // 1. Очищаем резервный пул и очередь предыдущей сети
         standbyPool.clear();
+        verifiedCellularQueue.clear();
 
         // 2. Сбрасываем привязку к физическому интерфейсу на системный дефолт (сотовую сеть)
         GoblinVpnService.updateUnderlyingNetwork(null);
@@ -757,6 +917,8 @@ public class AutoSwitchEngine {
                             Thread.sleep(600);
                         } catch (InterruptedException ignored) {}
 
+                        if (GoblinVpnService.isExplicitUserDisconnect) return;
+
                         boolean isAlreadyMobileBypass = false;
                         VpnServer current = currentConnectedServer;
                         if (current != null) {
@@ -768,70 +930,13 @@ public class AutoSwitchEngine {
 
                         if (!isAlreadyMobileBypass || isServerInCooldown(current.getServerKey()) || ServerPenaltyManager.getInstance(appContext).isPenalized(current.getServerKey())) {
                             AppLogger.i(TAG, "Active server [" + (current != null ? current.getDisplayName() : "Unknown")
-                                    + "] is not an active mobile bypass node. Selecting verified Mobile Bypass node...");
-
-                            VpnServer topBypass = null;
-
-                            // 1. Priority to Tier 0 proven server for instant handover
-                            List<VpnServer> provenList = MobileProvenConfigStorage.getInstance(appContext).getProvenMobileServers();
-                            if (provenList != null && !provenList.isEmpty()) {
-                                for (VpnServer ps : provenList) {
-                                    if (ps != null && ps.getHost() != null && !MainActivity.isKnownDeadHost(ps.getHost())) {
-                                        topBypass = ps;
-                                        AppLogger.i(TAG, "⭐ [Tier 0 Handover] Selected proven mobile node: "
-                                                + ps.getDisplayName() + " [" + ps.getHost() + ":" + ps.getPort() + "]");
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // 2. Priority to Tier 1 Community servers matching mobile whitelist
-                            if (topBypass == null) {
-                                try {
-                                    List<VpnServer> community = CommunityPoolManager.getInstance(appContext).getTopCommunityServers();
-                                    if (community != null && !community.isEmpty()) {
-                                        for (VpnServer cs : community) {
-                                            if (cs != null && cs.getHost() != null
-                                                    && !"193.233.199.233".equals(cs.getHost())
-                                                    && !MainActivity.isKnownDeadHost(cs.getHost())
-                                                    && WhitelistPoolManager.getInstance(appContext).isWhitelistedForMobile(cs.getHost())) {
-                                                topBypass = cs;
-                                                AppLogger.i(TAG, "⭐ [Tier 1 Handover] Selected community whitelisted node: "
-                                                        + cs.getDisplayName() + " [" + cs.getHost() + ":" + cs.getPort() + "]");
-                                                break;
-                                            }
-                                        }
-                                    }
-                                } catch (Throwable ignored) {}
-                            }
-
-                            // 3. Fallback to pre-flight from bypass pool
-                            if (topBypass == null) {
-                                List<VpnServer> bypass = WhitelistPoolManager.getInstance(appContext).getMobileBypassServerPool(appContext);
-                                List<VpnServer> candidates = new ArrayList<>();
-                                if (bypass != null && !bypass.isEmpty()) {
-                                    for (VpnServer s : bypass) {
-                                        if (s != null && !"193.233.199.233".equals(s.getHost())
-                                                && !MainActivity.isKnownDeadHost(s.getHost())
-                                                && WhitelistPoolManager.getInstance(appContext).isWhitelistedForMobile(s.getHost())) {
-                                            candidates.add(s);
-                                        }
-                                    }
-                                }
-                                if (!candidates.isEmpty()) {
-                                    topBypass = ServerPinger.preflightTelegramPingSync(candidates, 1800);
-                                    if (topBypass == null) {
-                                        topBypass = candidates.get(0);
-                                    }
-                                }
-                            }
-
-                            if (topBypass != null) {
-                                AppLogger.i(TAG, "⚡ Instant Mobile Handover to verified node: " + topBypass.getDisplayName() + " [" + topBypass.getHost() + "]");
-                                seamlessConnectToServer(topBypass, "Переключение Wi-Fi -> Сотовая связь (Fast-Path)");
+                                    + "] is not an active mobile bypass node. Launching 5-server cellular wave handover...");
+                            VpnServer queued = popVerifiedCellularServer();
+                            if (queued != null) {
+                                seamlessConnectToServer(queued, "Переключение Wi-Fi -> Сотовая связь (Queue)");
                                 triggerImmediateBenchmark();
                             } else {
-                                performEmergencyFullPoolSearchAndSwitch("Переключение Wi-Fi -> Сотовая связь");
+                                seamlessConnectToWaveSearch("Переключение Wi-Fi -> Сотовая связь (волновой подбор)");
                             }
                         } else {
                             AppLogger.i(TAG, "Active server is already a mobile bypass node. Seamlessly reconnecting over Cellular transport...");
@@ -864,6 +969,7 @@ public class AutoSwitchEngine {
         }
 
         standbyPool.clear();
+        verifiedCellularQueue.clear();
         isEmergencySweeping.set(false);
         GoblinVpnService.updateUnderlyingNetwork(null);
         AppLogger.i(TAG, "⚡ Active VPN detected during Cellular -> Wi-Fi switch! Handover to Wi-Fi initiated...");
@@ -1054,83 +1160,22 @@ public class AutoSwitchEngine {
 
         VpnServer next = null;
 
-        // On Cellular: STRICT 4-TIER WATERFALL!
+        // On Cellular: Instant 0ms failover to #2/#3 from wave queue, else launch 5-server Telegram wave probe
         if (isCellular) {
-            String failedKey = failedServer != null ? failedServer.getServerKey() : "";
-
-            // --- Tier 0: Проверенные ранее работавшие конфиги ---
-            try {
-                List<VpnServer> proven = MobileProvenConfigStorage.getInstance(appContext).getProvenMobileServers();
-                if (proven != null && !proven.isEmpty()) {
-                    for (VpnServer ps : proven) {
-                        if (ps != null && !ps.getServerKey().equalsIgnoreCase(failedKey)
-                                && !MainActivity.isKnownDeadHost(ps.getHost())) {
-                            next = ps;
-                            AppLogger.i(TAG, "⚡ [Tier 0] Unexpected drop failover selected proven node: "
-                                    + ps.getDisplayName() + " [" + ps.getHost() + "]");
-                            break;
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                AppLogger.w(TAG, "Error checking Tier 0 proven servers on drop: " + t.getMessage());
+            if (failedServer != null) {
+                sessionHandshakeFailedKeys.add(failedServer.getServerKey().toLowerCase(Locale.ROOT));
             }
-
-            // --- Tier 1: Whitelisted Community Servers ---
-            if (next == null) {
-                try {
-                    List<VpnServer> community = CommunityPoolManager.getInstance(appContext).getTopCommunityServers();
-                    if (community != null && !community.isEmpty()) {
-                        for (VpnServer cs : community) {
-                            if (cs != null && !cs.getServerKey().equalsIgnoreCase(failedKey)
-                                    && !"193.233.199.233".equals(cs.getHost())
-                                    && WhitelistPoolManager.getInstance(appContext).isWhitelistedForMobile(cs.getHost())
-                                    && !isServerInCooldown(cs.getServerKey())
-                                    && !ServerPenaltyManager.getInstance(appContext).isPenalized(cs.getServerKey())
-                                    && !MainActivity.isKnownDeadHost(cs.getHost())) {
-                                next = cs;
-                                AppLogger.i(TAG, "⚡ [Tier 1] Unexpected drop failover selected whitelisted community node: "
-                                        + cs.getDisplayName() + " [" + cs.getHost() + "]");
-                                break;
-                            }
-                        }
-                    }
-                } catch (Throwable t) {
-                    AppLogger.w(TAG, "Error checking Tier 1 community servers on drop: " + t.getMessage());
-                }
+            next = popVerifiedCellularServer();
+            if (next != null) {
+                AppLogger.i(TAG, "⚡ [Drop Failover] Switching immediately (0ms) to queued #next server: "
+                        + next.getDisplayName() + " [" + next.getHost() + "] (" + next.getPingMs() + "ms)");
+                seamlessConnectToServer(next, reason);
+                triggerImmediateBenchmark();
+            } else {
+                AppLogger.i(TAG, "⚡ [Drop Failover] Queue empty on cellular; launching 5-server wave recovery...");
+                seamlessConnectToWaveSearch(reason);
             }
-
-            // --- Tier 2 & 3: Mobile Bypass Pool ---
-            if (next == null) {
-                List<VpnServer> bypass = WhitelistPoolManager.getInstance(appContext).getMobileBypassServerPool(appContext);
-                if (bypass != null && !bypass.isEmpty()) {
-                    // Pass A: not penalized, not recently switched, not failed server
-                    for (VpnServer c : bypass) {
-                        if (c != null && !c.getServerKey().equalsIgnoreCase(failedKey)
-                                && !isServerInCooldown(c.getServerKey())
-                                && !ServerPenaltyManager.getInstance(appContext).isPenalized(c.getServerKey())
-                                && !isRecentlySwitched(c.getServerKey())
-                                && !MainActivity.isKnownDeadHost(c.getHost())) {
-                            next = c;
-                            AppLogger.i(TAG, "⚡ [Tier 2] Unexpected drop failover selected mobile bypass node: " + c.getDisplayName() + " [" + c.getHost() + "]");
-                            break;
-                        }
-                    }
-                    // Pass B: relax recent switch check if needed
-                    if (next == null) {
-                        for (VpnServer c : bypass) {
-                            if (c != null && !c.getServerKey().equalsIgnoreCase(failedKey)
-                                    && !isServerInCooldown(c.getServerKey())
-                                    && !ServerPenaltyManager.getInstance(appContext).isPenalized(c.getServerKey())
-                                    && !MainActivity.isKnownDeadHost(c.getHost())) {
-                                next = c;
-                                AppLogger.i(TAG, "⚡ [Tier 3] Unexpected drop failover selected mobile bypass node (relaxed): " + c.getDisplayName() + " [" + c.getHost() + "]");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            return;
         } else {
             // Wi-Fi: check standbyPool first
             while (!standbyPool.isEmpty()) {
@@ -1468,7 +1513,7 @@ public class AutoSwitchEngine {
 
             int total = filtered.size();
             int startIdx = (isCellular ? mobilePoolCursor : 0) % total;
-            int countToTest = Math.min(total, BATCH_TEST_SIZE * 2);
+            int countToTest = Math.min(total, BATCH_TEST_SIZE); // 5 servers per wave
 
             final List<VpnServer> testBatch = new ArrayList<>();
             for (int i = 0; i < countToTest; i++) {
@@ -1479,48 +1524,37 @@ public class AutoSwitchEngine {
                 mobilePoolCursor = (startIdx + countToTest) % total;
             }
 
-            final CountDownLatch latch = new CountDownLatch(testBatch.size());
-            final List<VpnServer> aliveServers = Collections.synchronizedList(new ArrayList<VpnServer>());
-
-            for (final VpnServer server : testBatch) {
-                benchmarkWorkerPool.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            int rtt = measureServerRtt(server);
-                            if (rtt >= 20 && rtt < 3200) {
-                                server.setPingMs(rtt);
-                                server.setAlive(true);
-                                aliveServers.add(server);
-                                reportCommunityStats(server, rtt, 0);
-                            } else {
-                                failedServerCooldowns.put(server.getServerKey(), SystemClock.elapsedRealtime());
+            List<VpnServer> aliveServers = ServerPinger.benchmarkBatchSync(testBatch, CELLULAR_WAVE_TIMEOUT_MS);
+            if (!aliveServers.isEmpty()) {
+                for (VpnServer alive : aliveServers) {
+                    reportCommunityStats(alive, alive.getPingMs(), 0);
+                }
+                standbyPool.clear();
+                if (isCellular) {
+                    // Add fresh responsive cellular backups into verifiedCellularQueue (avoiding duplicates)
+                    for (VpnServer alive : aliveServers) {
+                        boolean dup = false;
+                        for (VpnServer q : verifiedCellularQueue) {
+                            if (q != null && q.getServerKey().equalsIgnoreCase(alive.getServerKey())) {
+                                dup = true;
+                                break;
                             }
-                        } catch (Exception ignored) {
-                            failedServerCooldowns.put(server.getServerKey(), SystemClock.elapsedRealtime());
-                        } finally {
-                            latch.countDown();
+                        }
+                        if (!dup && verifiedCellularQueue.size() < 6) {
+                            verifiedCellularQueue.add(alive);
                         }
                     }
-                });
-            }
-
-            latch.await(3200, TimeUnit.MILLISECONDS);
-
-            if (!aliveServers.isEmpty()) {
-                Collections.sort(aliveServers, new Comparator<VpnServer>() {
-                    @Override
-                    public int compare(VpnServer a, VpnServer b) {
-                        return Integer.compare(a.getPingMs(), b.getPingMs());
-                    }
-                });
-
-                standbyPool.clear();
+                }
                 for (int i = 0; i < Math.min(aliveServers.size(), STANDBY_POOL_SIZE); i++) {
                     standbyPool.add(aliveServers.get(i));
                 }
 
-                AppLogger.i(TAG, "Standby Hot Pool refreshed with " + standbyPool.size() + " servers: " + standbyPool);
+                AppLogger.i(TAG, "Standby Hot Pool refreshed (" + testBatch.size() + "-wide batch): standby=" + standbyPool.size()
+                        + ", verifiedQueue=" + verifiedCellularQueue.size());
+            } else {
+                for (VpnServer dead : testBatch) {
+                    failedServerCooldowns.put(dead.getServerKey(), SystemClock.elapsedRealtime() + 60_000L);
+                }
             }
 
         } catch (Exception e) {
@@ -1716,10 +1750,21 @@ public class AutoSwitchEngine {
         if (failedServer != null) {
             recordServerFailure(failedServer.getServerKey());
             recordSwitchedServer(failedServer.getServerKey());
+            sessionHandshakeFailedKeys.add(failedServer.getServerKey().toLowerCase(Locale.ROOT));
         }
 
+        boolean isCellular = WhitelistPoolManager.isRunningOnCellular(appContext);
         VpnServer nextServer = null;
-        while (!standbyPool.isEmpty()) {
+        if (isCellular) {
+            nextServer = popVerifiedCellularServer();
+            if (nextServer == null) {
+                AppLogger.i(TAG, "⚡ [AutoSwitch] Cellular verified queue empty; launching 5-server Telegram wave probe...");
+                seamlessConnectToWaveSearch(reason);
+                return;
+            }
+        }
+
+        while (nextServer == null && !standbyPool.isEmpty()) {
             VpnServer cand = standbyPool.remove(0);
             if (cand != null && !isServerInCooldown(cand.getServerKey()) && !isRecentlySwitched(cand.getServerKey()) && !MainActivity.isKnownDeadHost(cand.getHost())) {
                 nextServer = cand;
@@ -1747,6 +1792,33 @@ public class AutoSwitchEngine {
                 runStandbyBenchmark();
             }
         }, 2, TimeUnit.SECONDS);
+    }
+
+    private void seamlessConnectToWaveSearch(String reason) {
+        lastSwitchTimestampMs = SystemClock.elapsedRealtime();
+        consecutiveDegradationCount = 0;
+        consecutiveDropCount = 0;
+
+        AppLogger.i(TAG, "⚡ WAVE AUTO-SWITCH ACTIVATED (" + reason + ")! Launching 5-server wave selection...");
+
+        Intent intent = new Intent(appContext, GoblinVpnService.class);
+        intent.setAction(GoblinVpnService.ACTION_CONNECT);
+        intent.putExtra(GoblinVpnService.EXTRA_AUTO_WAVE_SELECT, true);
+
+        NetworkPreferences prefs = NetworkPreferences.getInstance(appContext);
+        if (prefs.isRestrictedTelegramOnly()) {
+            intent.putExtra(GoblinVpnService.EXTRA_RESTRICTED_TELEGRAM_ONLY, true);
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appContext.startForegroundService(intent);
+            } else {
+                appContext.startService(intent);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to send wave auto-switch intent: " + e.getMessage(), e);
+        }
     }
 
     private void seamlessConnectToServer(VpnServer target, String reason) {

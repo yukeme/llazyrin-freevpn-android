@@ -39,6 +39,8 @@ import ru.llazyrin.goblinvpn.service.AppLogger;
 public class MobileProvenConfigStorage {
     private static final String TAG = "MobileProvenConfigStorage";
     private static final String STASH_FILE_NAME = ".mobile_proven.stash";
+    private static final String STICKY_PREFS_NAME = "goblin_mobile_sticky";
+    private static final String KEY_STICKY_CELLULAR_KEY = "sticky_cellular_server_key";
     private static final long MAX_AGE_MS = 7L * 24L * 3600L * 1000L; // 7 суток
 
     private static volatile MobileProvenConfigStorage instance = null;
@@ -286,10 +288,11 @@ public class MobileProvenConfigStorage {
             entries.add(found);
         }
 
-        AppLogger.i(TAG, "✅ [MobileProven] Stored working cellular node: " + found.remark
+        AppLogger.i(TAG, "✅ [MobileProven] Stored sticky working cellular node: " + found.remark
                 + " [" + found.serverKey + "] (successCount=" + found.successCount
                 + ", RTT=" + found.lastLatencyMs + "ms)");
 
+        setStickyServerKey(key);
         persistToStash();
     }
 
@@ -298,6 +301,10 @@ public class MobileProvenConfigStorage {
      */
     public synchronized void recordFailure(String serverKey) {
         if (serverKey == null || serverKey.isEmpty()) return;
+
+        if (serverKey.equalsIgnoreCase(getStickyServerKey())) {
+            clearStickyServerKey();
+        }
 
         loadFromStash();
         long now = System.currentTimeMillis();
@@ -383,6 +390,59 @@ public class MobileProvenConfigStorage {
     public synchronized VpnServer getBestProvenServer() {
         List<VpnServer> list = getProvenMobileServers();
         return (list != null && !list.isEmpty()) ? list.get(0) : null;
+    }
+
+    /**
+     * Returns the last working sticky cellular server so mobile connections reuse
+     * the same working config until it actually fails (avoiding redundant wave probes).
+     */
+    public synchronized VpnServer getStickyMobileServer() {
+        loadFromStash();
+        String stickyKey = getStickyServerKey();
+        long now = System.currentTimeMillis();
+        if (stickyKey != null && !stickyKey.isEmpty()) {
+            for (ProvenEntry e : entries) {
+                if (e != null && stickyKey.equalsIgnoreCase(e.serverKey)) {
+                    if (e.host != null && !e.host.isEmpty()
+                            && !MainActivity.isKnownDeadHost(e.host)
+                            && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileHost(e.host)
+                            && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(e.sni)
+                            && (now - e.lastSuccessMs <= MAX_AGE_MS)) {
+                        e.decayFailuresIfNeeded(now);
+                        if (e.consecutiveFailures == 0 && !e.isCoolingDown(now)) {
+                            AppLogger.d(TAG, "⚡ [StickyMobile] Reusing remembered working node: " + e.serverKey);
+                            return e.toVpnServer();
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        return getBestProvenServer();
+    }
+
+    public String getStickyServerKey() {
+        try {
+            return appContext.getSharedPreferences(STICKY_PREFS_NAME, Context.MODE_PRIVATE)
+                    .getString(KEY_STICKY_CELLULAR_KEY, null);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    public void setStickyServerKey(String serverKey) {
+        if (serverKey == null || serverKey.isEmpty()) return;
+        try {
+            appContext.getSharedPreferences(STICKY_PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putString(KEY_STICKY_CELLULAR_KEY, serverKey).apply();
+        } catch (Throwable ignored) {}
+    }
+
+    public void clearStickyServerKey() {
+        try {
+            appContext.getSharedPreferences(STICKY_PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().remove(KEY_STICKY_CELLULAR_KEY).apply();
+        } catch (Throwable ignored) {}
     }
 
     /**

@@ -3,14 +3,12 @@ package ru.llazyrin.goblinvpn.ui;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
-import android.content.Intent;
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
-import android.net.Uri;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
@@ -76,7 +74,6 @@ public class TunnelSettingsDialog {
 
         // Top Bar Controls
         FrameLayout btnTunnelBack = dialog.findViewById(R.id.btnTunnelBack);
-        TextView btnTunnelSupport = dialog.findViewById(R.id.btnTunnelSupport);
 
         if (btnTunnelBack != null) {
             btnTunnelBack.setOnClickListener(new View.OnClickListener() {
@@ -84,21 +81,6 @@ public class TunnelSettingsDialog {
                 public void onClick(View v) {
                     HapticFeedbackHelper.performButtonClick(v);
                     dialog.dismiss();
-                }
-            });
-        }
-
-        if (btnTunnelSupport != null) {
-            btnTunnelSupport.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    HapticFeedbackHelper.performButtonClick(v);
-                    try {
-                        Intent tgIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/llazyrin"));
-                        activity.startActivity(tgIntent);
-                    } catch (Exception e) {
-                        Toast.makeText(activity, "Не удалось открыть Telegram", Toast.LENGTH_SHORT).show();
-                    }
                 }
             });
         }
@@ -681,10 +663,13 @@ public class TunnelSettingsDialog {
                                              LinearLayout container,
                                              final Set<String> selectedCountries) {
         container.removeAllViews();
+        // Responsive 2-column grid (8dp spacing) so long country labels never clip or wrap awkwardly
         String[][] countryRows = new String[][]{
-                {"Россия (IP)", "Россия (сайты)", "Украина (IP)"},
-                {"Беларусь (IP)", "США (IP)", "Германия (IP)"},
-                {"Франция (IP)", "Великобритания (IP)", "Япония (IP)"}
+                {"Россия (IP)", "Россия (сайты)"},
+                {"Украина (IP)", "Беларусь (IP)"},
+                {"США (IP)", "Германия (IP)"},
+                {"Франция (IP)", "Великобритания (IP)"},
+                {"Япония (IP)"}
         };
 
         for (int r = 0; r < countryRows.length; r++) {
@@ -705,17 +690,19 @@ public class TunnelSettingsDialog {
                 final TextView chip = new TextView(activity);
                 LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(
                         0,
-                        dpToPx(activity, 36),
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
                         1f
                 );
                 if (c < cols.length - 1) {
-                    chipLp.setMarginEnd(dpToPx(activity, 6));
+                    chipLp.setMarginEnd(dpToPx(activity, 8));
                 }
                 chip.setLayoutParams(chipLp);
+                chip.setMinHeight(dpToPx(activity, 40));
+                chip.setPadding(dpToPx(activity, 10), dpToPx(activity, 6), dpToPx(activity, 10), dpToPx(activity, 6));
                 chip.setGravity(Gravity.CENTER);
                 chip.setText(country);
-                chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-                chip.setSingleLine(true);
+                chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+                chip.setMaxLines(2);
                 chip.setEllipsize(TextUtils.TruncateAt.END);
 
                 updateChipStyle(chip, selectedCountries.contains(country));
@@ -763,7 +750,7 @@ public class TunnelSettingsDialog {
             LinearLayout row = new LinearLayout(activity);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setBackgroundResource(R.drawable.bg_m3_metrics_card);
+            row.setBackgroundResource(R.drawable.bg_m3_server_card);
             int padH = dpToPx(activity, 14);
             int padV = dpToPx(activity, 12);
             row.setPadding(padH, padV, padH, padV);
@@ -825,7 +812,7 @@ public class TunnelSettingsDialog {
             LinearLayout row = new LinearLayout(activity);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setBackgroundResource(R.drawable.bg_m3_metrics_card);
+            row.setBackgroundResource(R.drawable.bg_m3_server_card);
             int padH = dpToPx(activity, 14);
             int padV = dpToPx(activity, 12);
             row.setPadding(padH, padV, padH, padV);

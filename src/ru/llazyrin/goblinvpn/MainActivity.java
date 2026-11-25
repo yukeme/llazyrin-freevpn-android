@@ -2351,19 +2351,21 @@ public class MainActivity extends Activity {
         // =========================================================================
         // 2. WI-FI / ETHERNET: Fast Pre-Flight from Warm Standby Pool
         // =========================================================================
-        try {
-            List<VpnServer> warmStandby = AutoSwitchEngine.getInstance(this).getStandbyPool();
-            if (warmStandby != null && !warmStandby.isEmpty()) {
-                for (VpnServer s : warmStandby) {
-                    if (s != null && s.isAlive() && !isKnownDeadHost(s.getHost())
-                            && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
-                            && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
-                        AppLogger.i("MainActivity", "⚡ Fast Pre-Flight: Selected warm standby node " + s.getDisplayName() + " [" + s.getHost() + "]");
-                        return s;
+        if (!isCellular) {
+            try {
+                List<VpnServer> warmStandby = AutoSwitchEngine.getInstance(this).getStandbyPool();
+                if (warmStandby != null && !warmStandby.isEmpty()) {
+                    for (VpnServer s : warmStandby) {
+                        if (s != null && s.isAlive() && !isKnownDeadHost(s.getHost())
+                                && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
+                                && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
+                            AppLogger.d("MainActivity", "⚡ Fast Pre-Flight: Selected warm standby node " + s.getDisplayName() + " [" + s.getHost() + "]");
+                            return s;
+                        }
                     }
                 }
-            }
-        } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {}
+        }
 
         // On Wi-Fi: check verified community top nodes first
         if (!isCellular) {
@@ -2374,7 +2376,7 @@ public class MainActivity extends Activity {
                         if (s != null && !isKnownDeadHost(s.getHost())
                                 && !AutoSwitchEngine.getInstance(this).isServerInCooldown(s.getServerKey())
                                 && !ServerPenaltyManager.getInstance(this).isPenalized(s.getServerKey())) {
-                            AppLogger.i("MainActivity", "⭐ Selected verified Community Top node: " + s.getDisplayName());
+                            AppLogger.d("MainActivity", "⭐ Selected verified Community Top node: " + s.getDisplayName());
                             return s;
                         }
                     }

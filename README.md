@@ -17,7 +17,7 @@
 
 <p align="center">
   <img src=".github/badges/android.svg" alt="Android Version" />
-  <a href="https://www.virustotal.com/gui/file/e39328a3c2e0f2fd9f729455580c4453e6666804be8ceaea0b51440652cde843" target="_blank" rel="noopener noreferrer"><img src=".github/badges/virustotal.svg" alt="VirusTotal: 0/65 Clean" /></a>
+  <a href="https://www.virustotal.com/gui/file/026c836a7aefdad96665207f1c0917e9297aab8720c8dd3e0253b68c6c48b879" target="_blank" rel="noopener noreferrer"><img src=".github/badges/virustotal.svg" alt="VirusTotal: 0/65 Clean" /></a>
   <img src=".github/badges/privacy.svg" alt="Privacy" />
   <img src=".github/badges/trackers.svg" alt="Trackers" />
   <img src=".github/badges/encryption.svg" alt="Encryption" />
@@ -52,9 +52,9 @@
 
 | Параметр | Значение |
 | :--- | :--- |
-| **Результат сканирования** | **[0 / 65 угроз — 100% Чисто (Clean)](https://www.virustotal.com/gui/file/e39328a3c2e0f2fd9f729455580c4453e6666804be8ceaea0b51440652cde843)** |
-| **Хэш релиза (SHA-256)** | `e39328a3c2e0f2fd9f729455580c4453e6666804be8ceaea0b51440652cde843` |
-| **Официальный отчет** | [Открыть отчет на VirusTotal ↗](https://www.virustotal.com/gui/file/e39328a3c2e0f2fd9f729455580c4453e6666804be8ceaea0b51440652cde843) |
+| **Результат сканирования** | **[0 / 65 угроз — 100% Чисто (Clean)](https://www.virustotal.com/gui/file/026c836a7aefdad96665207f1c0917e9297aab8720c8dd3e0253b68c6c48b879)** |
+| **Хэш релиза (SHA-256)** | `026c836a7aefdad96665207f1c0917e9297aab8720c8dd3e0253b68c6c48b879` |
+| **Официальный отчет** | [Открыть отчет на VirusTotal ↗](https://www.virustotal.com/gui/file/026c836a7aefdad96665207f1c0917e9297aab8720c8dd3e0253b68c6c48b879) |
 
 > 💡 **Как проверить самостоятельно:** Вы можете загрузить APK на [VirusTotal.com](https://www.virustotal.com) или скопировать SHA-256 и проверить файл в один клик.
 
@@ -77,8 +77,11 @@
 
 ---
 
-## ⚡ Особенности версии 2.8.2 (Сборка 68)
+## ⚡ Особенности версии 2.8.2 (Сборка 69)
 
+* **Sticky-режим на сотовой сети:** запоминает последний рабочий мобильный узел и переподключается к нему напрямую без повторных пингов, пока он остаётся в строю.
+* **Честный тумблер автопереключения:** при отключённом автопереключении и/или выборе конкретного узла сервер не меняется автоматически.
+* **Единый плоский дизайн вкладок и «Топ сообщества»:** убраны градиенты и обрезания в настройках туннеля и раздельного туннелирования, кнопка закрытия перенесена вправо, улучшена двусторонняя синхронизация лучших конфигов сообщества.
 * **Точный автоподбор на сотовой сети:** исправлено определение активной сотовой сети при Smart Switch, устранено сужение волн до 1 узла, оптимизировано время волновых проб (`3.8с`) и приоритезация стабильных мобильных SNI.
 * **Мгновенное подключение:** старт и поднятие защищенного туннеля всего за 2–3 секунды.
 * **Smart Failover:** автоматический интеллектуальный подбор и ротация резервных узлов при смене Wi-Fi на мобильную сеть.

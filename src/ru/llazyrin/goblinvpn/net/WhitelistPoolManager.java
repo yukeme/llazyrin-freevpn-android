@@ -393,34 +393,24 @@ public class WhitelistPoolManager {
         // These nodes pass mobile TSPU cellular blocks AND offer unrestricted access to the open web
         // =========================================================================
         if (s.contains("plaindune.com")) {
-            return 100; // 🇧🇬 Bulgaria European egress on Beeline CDN IP 78.159.240.72 / 78.159.250.155 (Gold standard!)
+            return 100; // Bulgaria European egress on Beeline CDN IP 78.159.240.72 / 78.159.250.155
         }
         if (s.contains("hexdey.com") || s.contains("144.hexdey")) {
-            return 99; // 🇩🇪 Germany European egress on Selectel CIDR 178.248.236.229
+            return 99; // Germany European egress on Selectel CIDR 178.248.236.229
         }
-        if (s.contains("olvento.space")) {
-            return 98; // 🇩🇪 Germany European egress on Selectel CIDR 188.225.36.219 (429ms RTT)
+        if (s.contains("cdnwh.icu") || s.contains("starsov.pro") || s.contains("paruscamp.com") || s.contains("community-bd.paruscamp.com")) {
+            return 97; // Proven mobile bypass SNIs in Build 67 telemetry
         }
-        if (s.contains("cdn.dash.gearmonster.org") || s.contains("gearmonster.org")) {
-            return 97; // 🇬🇧 United Kingdom egress
+        if (s.contains("cdn.dash.gearmonster.org") || s.contains("gearmonster.org")
+                || s.contains("for.quick-frost.ru") || s.contains("quick-frost.ru")
+                || s.contains("telemetryapi.org")) {
+            return 96; // High-reliability European egress & telemetry-friendly SNIs
         }
-        if (s.contains("paruscamp.com") || s.contains("community-bd.paruscamp.com")) {
-            return 96; // 🇳🇱 Netherlands European egress
+        if (s.contains("maxleshax") || s.contains("fosonmine")) {
+            return 93; // Secondary European egress
         }
-        if (s.contains("cadrin.wtf") || s.contains("flintstack.dev")) {
-            return 95; // 🇩🇪 Germany egress
-        }
-        if (s.contains("for.quick-frost.ru") || s.contains("quick-frost.ru")) {
-            return 96; // 🇳🇱 Netherlands egress
-        }
-        if (s.contains("emberworks.cloud")) {
-            return 95; // 🇸🇪 Sweden European egress
-        }
-        if (s.contains("cdn.dash.gearmonster.org") || s.contains("gearmonster.org")) {
-            return 95; // 🇬🇧 United Kingdom egress
-        }
-        if (s.contains("olvento.space") || s.contains("telemetryapi.org") || s.contains("maxleshax") || s.contains("fosonmine")) {
-            return 92; // Secondary European egress
+        if (s.contains("olvento.space") || s.contains("cadrin.wtf") || s.contains("flintstack.dev") || s.contains("emberworks.cloud")) {
+            return 87; // Demoted below proven cellular SNIs after Build 67 wave timeout telemetry
         }
 
         // Russian domestic services: excellent handshake on mobile towers, but domestic-only egress / captcha
@@ -490,10 +480,35 @@ public class WhitelistPoolManager {
             ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return false;
 
-            boolean wifiActivelyConnected = false;
+            boolean wifiValidated = false;
+            boolean wifiUnvalidated = false;
             boolean cellularConnected = false;
 
-            // 1. Inspect underlying physical network interfaces (skipping VPN overlay)
+            // 1. Direct check of active default physical network (Android 6.0+) when not masked by VPN
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Network activeNet = cm.getActiveNetwork();
+                if (activeNet != null) {
+                    NetworkCapabilities activeCaps = cm.getNetworkCapabilities(activeNet);
+                    if (activeCaps != null && !activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                        boolean hasNet = activeCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+                        boolean notSusp = activeCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED);
+                        boolean validated = activeCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+                        if (activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                                && !activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                                && !activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                                && (hasNet || notSusp)) {
+                            return true;
+                        }
+                        if ((activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                                || activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+                                && hasNet && notSusp && validated) {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            // 2. Inspect underlying physical network interfaces (skipping VPN overlay)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 Network[] allNetworks = cm.getAllNetworks();
                 if (allNetworks != null) {
@@ -507,18 +522,24 @@ public class WhitelistPoolManager {
 
                         boolean hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
                         boolean notSuspended = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED);
+                        boolean isValidated = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                                ? caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                                : true;
 
                         NetworkInfo info = cm.getNetworkInfo(net);
                         boolean isConn = (info != null && info.isConnected());
 
                         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                                 || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-                            // Wi-Fi is ONLY treated as active if it is genuinely connected and has internet
                             if (isConn && hasInternet && notSuspended) {
-                                wifiActivelyConnected = true;
+                                if (isValidated) {
+                                    wifiValidated = true;
+                                } else {
+                                    wifiUnvalidated = true;
+                                }
                             }
                         } else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-                            if (isConn || hasInternet) {
+                            if (isConn || (hasInternet && notSuspended)) {
                                 cellularConnected = true;
                             }
                         }
@@ -526,17 +547,18 @@ public class WhitelistPoolManager {
                 }
             }
 
-            // If Wi-Fi is genuinely connected and delivering internet, we are NOT on cellular
-            if (wifiActivelyConnected) {
+            // Genuinely validated Wi-Fi takes priority; unvalidated Wi-Fi yields to active cellular
+            if (wifiValidated) {
                 return false;
             }
-
-            // If a cellular interface is present and connected, device is on cellular
             if (cellularConnected) {
                 return true;
             }
+            if (wifiUnvalidated) {
+                return false;
+            }
 
-            // 2. Direct check of the active default network (Android 6.0+)
+            // 3. Fallback for active default network (Android 6.0+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 Network activeNet = cm.getActiveNetwork();
                 if (activeNet != null) {
@@ -909,45 +931,40 @@ public class WhitelistPoolManager {
             boolean isProven = MobileProvenConfigStorage.getInstance(ctx).isProven(s.getServerKey());
             boolean isInWhitelist = isWhitelistedForMobile(s.getHost());
 
-            // Tier 1: Высшая вероятность (белый SNI РФ, wholebeam, cadrin, 144.hexdey, quick-frost, proven) - до 15 серверов
+            // Collect ALL Tier 1 candidates first before sorting (do NOT truncate before sort!)
             if (isProven || score >= 95) {
                 s.setMobileTier(1);
-                if (tier1.size() < 15) {
-                    tier1.add(s);
-                } else if (tier2.size() < 10) {
-                    s.setMobileTier(2);
-                    tier2.add(s);
-                } else {
-                    s.setMobileTier(3);
-                    tier3.add(s);
-                }
+                tier1.add(s);
             } else if (score >= 70 || isInWhitelist) {
                 s.setMobileTier(2);
-                if (tier2.size() < 10) {
-                    tier2.add(s);
-                } else {
-                    s.setMobileTier(3);
-                    tier3.add(s);
-                }
+                tier2.add(s);
             } else {
                 s.setMobileTier(3);
                 tier3.add(s);
             }
         }
 
-        // Сортировка внутри пулов по пингу / оценке
+        final MobileProvenConfigStorage provenStorage = MobileProvenConfigStorage.getInstance(ctx);
+        final ServerPenaltyManager penaltyMgr = ServerPenaltyManager.getInstance(ctx);
+
+        // Сортировка внутри пулов: не-штрафные -> проверенные на устройстве -> высокий SNI-рейтинг -> измеренный пинг
         Collections.sort(tier1, new Comparator<VpnServer>() {
             @Override
             public int compare(VpnServer a, VpnServer b) {
-                int pA = (a.getPingMs() > 0) ? a.getPingMs() : 9999;
-                int pB = (b.getPingMs() > 0) ? b.getPingMs() : 9999;
-                if (pA != pB && pA != 9999 && pB != 9999) {
-                    // Both have verified measured pings: lower ping wins
-                    return Integer.compare(pA, pB);
-                }
+                boolean penA = penaltyMgr.isPenalized(a.getServerKey());
+                boolean penB = penaltyMgr.isPenalized(b.getServerKey());
+                if (penA != penB) return penA ? 1 : -1;
+
+                boolean provA = provenStorage.isProven(a.getServerKey());
+                boolean provB = provenStorage.isProven(b.getServerKey());
+                if (provA != provB) return provB ? 1 : -1;
+
                 int sA = getSniMobileScore(a.getSni(), a.getPort());
                 int sB = getSniMobileScore(b.getSni(), b.getPort());
                 if (sA != sB) return Integer.compare(sB, sA);
+
+                int pA = (a.getPingMs() > 0 && a.getPingMs() != 45) ? a.getPingMs() : 9999;
+                int pB = (b.getPingMs() > 0 && b.getPingMs() != 45) ? b.getPingMs() : 9999;
                 return Integer.compare(pA, pB);
             }
         });
@@ -955,17 +972,26 @@ public class WhitelistPoolManager {
         Collections.sort(tier2, new Comparator<VpnServer>() {
             @Override
             public int compare(VpnServer a, VpnServer b) {
-                int pA = (a.getPingMs() > 0) ? a.getPingMs() : 9999;
-                int pB = (b.getPingMs() > 0) ? b.getPingMs() : 9999;
-                if (pA != pB && pA != 9999 && pB != 9999) {
-                    return Integer.compare(pA, pB);
-                }
+                boolean penA = penaltyMgr.isPenalized(a.getServerKey());
+                boolean penB = penaltyMgr.isPenalized(b.getServerKey());
+                if (penA != penB) return penA ? 1 : -1;
+
                 int sA = getSniMobileScore(a.getSni(), a.getPort());
                 int sB = getSniMobileScore(b.getSni(), b.getPort());
                 if (sA != sB) return Integer.compare(sB, sA);
+
+                int pA = (a.getPingMs() > 0 && a.getPingMs() != 45) ? a.getPingMs() : 9999;
+                int pB = (b.getPingMs() > 0 && b.getPingMs() != 45) ? b.getPingMs() : 9999;
                 return Integer.compare(pA, pB);
             }
         });
+
+        // Keep top 20 sorted nodes in Tier 1 (4 waves of 5), spill excess into Tier 2
+        while (tier1.size() > 20) {
+            VpnServer extra = tier1.remove(tier1.size() - 1);
+            extra.setMobileTier(2);
+            tier2.add(extra);
+        }
 
         List<VpnServer> sortedPool = new ArrayList<>(tier1.size() + tier2.size() + tier3.size());
         sortedPool.addAll(tier1);

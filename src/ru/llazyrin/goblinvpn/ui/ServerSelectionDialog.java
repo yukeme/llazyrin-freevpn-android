@@ -860,7 +860,7 @@ public class ServerSelectionDialog {
             if (position == 0) {
                 // "⚡ Автовыбор (Лучший пинг)" always at top
                 tvFlag.setText("⚡");
-                tvFlag.setTextSize(24);
+                tvFlag.setTextSize(22);
 
                 tvName.setText("Автовыбор (Лучший пинг)");
                 tvName.setTextColor(Color.WHITE);

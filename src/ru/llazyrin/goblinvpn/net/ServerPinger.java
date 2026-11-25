@@ -1,11 +1,7 @@
 package ru.llazyrin.goblinvpn.net;
 
-import android.content.Context;
 import android.os.Build;
 import android.util.Log;
-
-import ru.llazyrin.goblinvpn.MainActivity;
-import ru.llazyrin.goblinvpn.service.AppLogger;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,7 +21,9 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -40,6 +38,7 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
 import ru.llazyrin.goblinvpn.model.VpnServer;
+import ru.llazyrin.goblinvpn.service.AppLogger;
 import ru.llazyrin.goblinvpn.service.GoblinVpnService;
 import ru.llazyrin.goblinvpn.service.VpnState;
 import libv2ray.Libv2ray;
@@ -80,6 +79,23 @@ public class ServerPinger {
             return t;
         }
     });
+
+    // Shared bounded pool for concurrent Telegram / GStatic sub-probes inside measureRealProxyDelay
+    // Prevents per-server FixedThreadPool leaks while bounding concurrent Libv2ray checks
+    private static final ExecutorService probeSubPool = new ThreadPoolExecutor(
+            4, 16, 30L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<Runnable>(64),
+            new ThreadFactory() {
+                private final AtomicInteger count = new AtomicInteger(0);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "GoblinProbeSub-" + count.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy()
+    );
 
     private static volatile SSLSocketFactory trustAllSocketFactory = null;
 
@@ -397,7 +413,7 @@ public class ServerPinger {
 
             socket.connect(new InetSocketAddress(host, port), timeoutMs);
 
-            if (isRealityOrTls && !server.isReality()) {
+            if (isRealityOrTls) {
                 SSLSocketFactory factory = getTrustAllSocketFactory();
                 sslSocket = (SSLSocket) factory.createSocket(socket, host, port, true);
                 GoblinVpnService.protectSocket(sslSocket);
@@ -474,10 +490,12 @@ public class ServerPinger {
             return clampRealisticPing(rtt, "gstatic_active_tunnel");
         }
 
-        // 3. Tertiary endpoint: Cloudflare generate_204 through active Xray tunnel
-        rtt = GoblinVpnService.measureActiveTunnelDelay(HTTP_204_CLOUDFLARE);
-        if (rtt > 0) {
-            return clampRealisticPing(rtt, "cloudflare_active_tunnel");
+        // 3. Tertiary endpoint: Cloudflare generate_204 through active Xray tunnel (Wi-Fi only)
+        if (!isCellular) {
+            rtt = GoblinVpnService.measureActiveTunnelDelay(HTTP_204_CLOUDFLARE);
+            if (rtt > 0) {
+                return clampRealisticPing(rtt, "cloudflare_active_tunnel");
+            }
         }
 
         return -1;
@@ -502,43 +520,122 @@ public class ServerPinger {
      * This executes a REAL proxy handshake, data tunneling and verified HTTP response.
      * If Telegram or Google responds, server is 100% guaranteed working!
      */
-    public static int measureRealProxyDelay(VpnServer server, int timeoutMs) {
-        if (server == null) return -1;
-        if (timeoutMs <= 0) timeoutMs = DEFAULT_TIMEOUT_MS;
-
-        // 1. Outbound delay measurement through native Xray core using benchmark config (NO TUN)
+    /**
+     * Fast direct socket preflight probe with protectSocket.
+     * Rejects unreachable or blackholed IPs within timeoutMs (typically 1200ms)
+     * before incurring expensive Xray/Libv2ray configuration generation.
+     */
+    public static boolean pingSocketDirectFast(String host, int port, int timeoutMs) {
+        if (host == null || host.trim().isEmpty() || port <= 0) return false;
+        Socket socket = new Socket();
         try {
-            String configJson = XrayConfigGenerator.generateBenchmarkConfig(server);
-            if (configJson != null && !configJson.trim().isEmpty()) {
-                // First test Telegram
-                long delay = Libv2ray.measureOutboundDelay(configJson, TELEGRAM_API_URL);
-                if (delay > 0) {
-                    int ping = clampRealisticPing(delay, server.getHost());
-                    server.setAlive(true);
-                    server.setPingMs(ping);
-                    Log.i(TAG, "measureRealProxyDelay Telegram OK: " + server.getHost() + " (" + ping + " ms)");
-                    return ping;
-                }
+            GoblinVpnService.protectSocket(socket);
+            socket.setTcpNoDelay(true);
+            socket.setSoTimeout(timeoutMs);
+            socket.connect(new InetSocketAddress(host.trim(), port), timeoutMs);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            try { socket.close(); } catch (Throwable ignored) {}
+        }
+    }
 
-                // Fallback to Google GStatic
-                long fallbackDelay = Libv2ray.measureOutboundDelay(configJson, HTTP_204_GSTATIC);
-                if (fallbackDelay > 0) {
-                    int ping = clampRealisticPing(fallbackDelay, server.getHost());
+    /**
+     * Measures real HTTP proxy latency through native Xray core Libv2ray without TUN.
+     * Enforces an overall deadline across preflight TCP socket check and concurrent
+     * Telegram API / GStatic 204 probes via shared daemon sub-pool.
+     * Exits immediately if either probe succeeds or if both probes fail fast.
+     */
+    public static int measureRealProxyDelay(final VpnServer server, int timeoutMs) {
+        if (server == null) return -1;
+        final long overallBudgetMs = (timeoutMs > 0 && timeoutMs <= 4000) ? timeoutMs : 2500L;
+        final long startMs = System.nanoTime() / 1_000_000L;
+
+        // 0. Instant Socket Preflight: if raw TCP socket is blocked/unreachable, fail fast
+        int preflightCapMs = (int) Math.min(950L, overallBudgetMs);
+        if (!pingSocketDirectFast(server.getHost(), server.getPort(), preflightCapMs)) {
+            server.setAlive(false);
+            server.setPingMs(-1);
+            return -1;
+        }
+
+        long elapsedPreflightMs = (System.nanoTime() / 1_000_000L) - startMs;
+        long probeWaitMs = Math.max(500L, overallBudgetMs - elapsedPreflightMs);
+
+        // 1. Concurrent In-tunnel probes via Libv2ray.measureOutboundDelay using shared probeSubPool
+        try {
+            final String configJson = XrayConfigGenerator.generateBenchmarkConfig(server);
+            if (configJson != null && !configJson.trim().isEmpty()) {
+                final AtomicInteger resultPing = new AtomicInteger(-1);
+                final AtomicInteger finishedCount = new AtomicInteger(0);
+                final CountDownLatch latch = new CountDownLatch(1);
+
+                // Probe A: Telegram API (Primary gold standard for Russian mobile connectivity)
+                probeSubPool.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            long delay = Libv2ray.measureOutboundDelay(configJson, TELEGRAM_API_URL);
+                            if (delay > 0) {
+                                int ping = clampRealisticPing(delay, server.getHost());
+                                if (resultPing.compareAndSet(-1, ping)) {
+                                    latch.countDown();
+                                }
+                            }
+                        } catch (Throwable ignored) {
+                        } finally {
+                            if (finishedCount.incrementAndGet() >= 2) {
+                                latch.countDown();
+                            }
+                        }
+                    }
+                });
+
+                // Probe B: Google Connectivity Check 204 (Fast unencrypted HTTP inside encrypted VLESS tunnel)
+                probeSubPool.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            long delay = Libv2ray.measureOutboundDelay(configJson, HTTP_204_GSTATIC);
+                            if (delay > 0) {
+                                int ping = clampRealisticPing(delay, server.getHost());
+                                if (resultPing.compareAndSet(-1, ping)) {
+                                    latch.countDown();
+                                }
+                            }
+                        } catch (Throwable ignored) {
+                        } finally {
+                            if (finishedCount.incrementAndGet() >= 2) {
+                                latch.countDown();
+                            }
+                        }
+                    }
+                });
+
+                try {
+                    latch.await(probeWaitMs, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException ignored) {}
+
+                int res = resultPing.get();
+                if (res > 0) {
                     server.setAlive(true);
-                    server.setPingMs(ping);
-                    Log.i(TAG, "measureRealProxyDelay GStatic OK: " + server.getHost() + " (" + ping + " ms)");
-                    return ping;
+                    server.setPingMs(res);
+                    WhitelistPoolManager.recordServerPing(server.getServerKey(), res);
+                    AppLogger.i(TAG, "🔬 measureRealProxyDelay FAST OK: " + server.getHost() + ":" + server.getPort()
+                            + " (SNI: " + server.getSni() + ") -> " + res + " ms");
+                    return res;
                 }
             }
         } catch (Throwable t) {
-            Log.d(TAG, "measureOutboundDelay probe exception for " + server.getHost() + ": " + t.getMessage());
+            AppLogger.d(TAG, "measureOutboundDelay probe exception for " + server.getHost() + ": " + t.getMessage());
         }
 
         // 2. Fallback to TLS/Socket direct ping ONLY for direct TCP nodes
         boolean isCdnOrWs = false;
         if (server.getRawUri() != null) {
             String ru = server.getRawUri().toLowerCase();
-            if (ru.contains("type=ws") || ru.contains("type=grpc")) {
+            if (ru.contains("type=ws") || ru.contains("type=grpc") || ru.contains("type=xhttp") || ru.startsWith("vless://")) {
                 isCdnOrWs = true;
             }
         }
@@ -547,13 +644,17 @@ public class ServerPinger {
         }
 
         if (isCdnOrWs) {
-            // For CDN/WS/gRPC, if real proxy delay failed, do NOT accept deceptive Anycast TCP socket responses!
+            // For CDN/WS/gRPC/xHTTP/VLESS, if real proxy delay failed, do NOT accept deceptive Anycast TCP socket responses!
             server.setAlive(false);
             server.setPingMs(-1);
             return -1;
         }
 
-        return pingServerDirect(server, timeoutMs);
+        int directPing = pingServerDirect(server, 1500);
+        if (directPing > 0) {
+            WhitelistPoolManager.recordServerPing(server.getServerKey(), directPing);
+        }
+        return directPing;
     }
 
     /**
@@ -698,151 +799,7 @@ public class ServerPinger {
      * Benchmarks up to 4 candidate servers in parallel with a tight deadline (e.g. 750ms).
      * Returns the lowest-latency responsive alive server, or candidates.get(0) if all timeout.
      */
-    /**
-     * Cellular-specific In-Tunnel Telegram Benchmark via Libv2ray.
-     * Guaranteed zero-false-positive check: returns > 0 only if Telegram API responds.
-     */
-    public static int measureTelegramDelay(VpnServer server, int timeoutMs) {
-        if (server == null) return -1;
-        if (timeoutMs <= 0) timeoutMs = 1200;
-        String host = server.getHost();
-        if (host == null || MainActivity.isKnownDeadHost(host)) {
-            server.setAlive(false);
-            server.setPingMs(-1);
-            return -1;
-        }
-        if (!WhitelistPoolManager.isSniPermittedOnCellular(server.getSni())) {
-            server.setAlive(false);
-            server.setPingMs(-1);
-            return -1;
-        }
-        try {
-            String configJson = XrayConfigGenerator.generateBenchmarkConfig(server);
-            if (configJson != null && !configJson.trim().isEmpty()) {
-                long delay = Libv2ray.measureOutboundDelay(configJson, TELEGRAM_API_URL);
-                if (delay > 0) {
-                    int ping = clampRealisticPing(delay, host);
-                    server.setAlive(true);
-                    server.setPingMs(ping);
-                    Log.i(TAG, "measureTelegramDelay Telegram OK for " + host + " (" + ping + " ms)");
-                    return ping;
-                }
-            }
-        } catch (Throwable t) {
-            Log.d(TAG, "measureTelegramDelay error for " + host + ": " + t.getMessage());
-        }
-        server.setAlive(false);
-        server.setPingMs(-1);
-        return -1;
-    }
-
-    /**
-     * Automated 3-Tier Telegram-First Probing and Selector for Cellular networks.
-     * Probes Tier 1 first in parallel. If any responds, returns the fastest one.
-     * If Tier 1 fails, cascades to Tier 2, then Tier 3.
-     * Ensures 100% genuine in-tunnel connectivity without false positives.
-     */
-    public static VpnServer selectBestTelegramBypassNode(Context context,
-                                                         List<VpnServer> tier1,
-                                                         List<VpnServer> tier2,
-                                                         List<VpnServer> tier3,
-                                                         int perNodeTimeoutMs) {
-        if (perNodeTimeoutMs <= 0) perNodeTimeoutMs = 1200;
-
-        // Phase 1: Test Tier 1 (Highest probability nodes)
-        if (tier1 != null && !tier1.isEmpty()) {
-            VpnServer best1 = probeTierForFastestTelegram(tier1, perNodeTimeoutMs);
-            if (best1 != null) {
-                AppLogger.i(TAG, "✅ [3-Tier Selector] Found Telegram-verified Tier 1 node: "
-                        + best1.getDisplayName() + " [" + best1.getHost() + ", ping=" + best1.getPingMs() + "ms]");
-                return best1;
-            }
-        }
-
-        // Phase 2: Test Tier 2 (Moderate probability nodes)
-        if (tier2 != null && !tier2.isEmpty()) {
-            AppLogger.i(TAG, "⚡ [3-Tier Selector] Tier 1 exhausted, testing Tier 2 (" + tier2.size() + " nodes)...");
-            VpnServer best2 = probeTierForFastestTelegram(tier2, perNodeTimeoutMs);
-            if (best2 != null) {
-                AppLogger.i(TAG, "✅ [3-Tier Selector] Found Telegram-verified Tier 2 node: "
-                        + best2.getDisplayName() + " [" + best2.getHost() + ", ping=" + best2.getPingMs() + "ms]");
-                return best2;
-            }
-        }
-
-        // Phase 3: Test Tier 3 (Fallback probability nodes)
-        if (tier3 != null && !tier3.isEmpty()) {
-            AppLogger.i(TAG, "⚡ [3-Tier Selector] Tier 2 exhausted, testing Tier 3 (" + tier3.size() + " nodes)...");
-            VpnServer best3 = probeTierForFastestTelegram(tier3, perNodeTimeoutMs);
-            if (best3 != null) {
-                AppLogger.i(TAG, "✅ [3-Tier Selector] Found Telegram-verified Tier 3 node: "
-                        + best3.getDisplayName() + " [" + best3.getHost() + ", ping=" + best3.getPingMs() + "ms]");
-                return best3;
-            }
-        }
-
-        // Fallback: Return top unpenalized Tier 1 node if network was slow during probes
-        if (tier1 != null && !tier1.isEmpty()) {
-            for (VpnServer s : tier1) {
-                if (s != null && s.getHost() != null && !MainActivity.isKnownDeadHost(s.getHost())
-                        && !ServerPenaltyManager.getInstance(context).isPenalized(s.getServerKey())) {
-                    AppLogger.w(TAG, "⚠️ [3-Tier Selector] Probes timed out, falling back to top Tier 1 node: "
-                            + s.getDisplayName() + " [" + s.getHost() + "]");
-                    return s;
-                }
-            }
-            return tier1.get(0);
-        }
-
-        return null;
-    }
-
-    private static VpnServer probeTierForFastestTelegram(List<VpnServer> tier, int timeoutMs) {
-        if (tier == null || tier.isEmpty()) return null;
-        final int limit = Math.min(tier.size(), 6);
-        final List<VpnServer> candidates = new ArrayList<>(tier.subList(0, limit));
-        final List<VpnServer> responsive = Collections.synchronizedList(new ArrayList<VpnServer>());
-        final CountDownLatch latch = new CountDownLatch(candidates.size());
-
-        for (final VpnServer s : candidates) {
-            final int effTimeout = timeoutMs;
-            pool.execute(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        int rtt = measureTelegramDelay(s, effTimeout);
-                        if (rtt > 0 && s.isAlive()) {
-                            responsive.add(s);
-                        }
-                    } catch (Throwable ignored) {
-                    } finally {
-                        latch.countDown();
-                    }
-                }
-            });
-        }
-
-        try {
-            latch.await(timeoutMs + 300, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException ignored) {}
-
-        if (!responsive.isEmpty()) {
-            Collections.sort(responsive, new Comparator<VpnServer>() {
-                @Override
-                public int compare(VpnServer a, VpnServer b) {
-                    return Integer.compare(a.getPingMs(), b.getPingMs());
-                }
-            });
-            return responsive.get(0);
-        }
-        return null;
-    }
-
     public static VpnServer preflightPingSync(List<VpnServer> candidates, int timeoutMs) {
-        return preflightPingSync(candidates, timeoutMs, false);
-    }
-
-    public static VpnServer preflightPingSync(List<VpnServer> candidates, int timeoutMs, final boolean isCellular) {
         if (candidates == null || candidates.isEmpty()) {
             return null;
         }
@@ -862,12 +819,7 @@ public class ServerPinger {
                 @Override
                 public void run() {
                     try {
-                        int rtt;
-                        if (isCellular) {
-                            rtt = measureTelegramDelay(s, effTimeout);
-                        } else {
-                            rtt = pingServerDirect(s, effTimeout);
-                        }
+                        int rtt = pingServerDirect(s, effTimeout);
                         if (rtt > 0 && s.isAlive()) {
                             responsive.add(s);
                         }
@@ -893,6 +845,90 @@ public class ServerPinger {
             return responsive.get(0);
         }
 
+        return null;
+    }
+
+    /**
+     * Benchmarks a batch of candidate servers (e.g. wave of 5 servers) simultaneously
+     * using real Xray proxy delay probes (Telegram API + GStatic 204).
+     * Returns ALL responsive servers sorted fastest-first (#1, #2, #3...) so failover can
+     * immediately step through #2 -> #3 without re-pinging.
+     */
+    public static List<VpnServer> benchmarkBatchSync(List<VpnServer> batch, int timeoutMs) {
+        List<VpnServer> sortedAlive = new ArrayList<>();
+        if (batch == null || batch.isEmpty()) {
+            return sortedAlive;
+        }
+        final int effTimeout = (timeoutMs > 0) ? timeoutMs : 2500;
+        final List<VpnServer> slice = new ArrayList<>();
+        for (VpnServer s : batch) {
+            if (s != null) slice.add(s);
+        }
+        if (slice.isEmpty()) {
+            return sortedAlive;
+        }
+
+        final List<VpnServer> responsive = Collections.synchronizedList(new ArrayList<VpnServer>());
+        final CountDownLatch latch = new CountDownLatch(slice.size());
+
+        for (final VpnServer s : slice) {
+            pool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        int delay = measureRealProxyDelay(s, effTimeout);
+                        if (delay > 0 && s.isAlive()) {
+                            responsive.add(s);
+                        }
+                    } catch (Throwable ignored) {
+                    } finally {
+                        latch.countDown();
+                    }
+                }
+            });
+        }
+
+        try {
+            latch.await(effTimeout + 300L, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {}
+
+        if (!responsive.isEmpty()) {
+            sortedAlive.addAll(responsive);
+            Collections.sort(sortedAlive, new Comparator<VpnServer>() {
+                @Override
+                public int compare(VpnServer a, VpnServer b) {
+                    return Integer.compare(a.getPingMs(), b.getPingMs());
+                }
+            });
+            for (VpnServer alive : sortedAlive) {
+                WhitelistPoolManager.recordServerPing(alive.getServerKey(), alive.getPingMs());
+            }
+        }
+        return sortedAlive;
+    }
+
+    /**
+     * Cellular-specific fast preflight probe that verifies Telegram API connectivity.
+     * Delegates to benchmarkBatchSync (up to 5 candidates) and returns the fastest alive node.
+     */
+    public static VpnServer preflightTelegramPingSync(List<VpnServer> candidates, int timeoutMs) {
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
+        if (candidates.size() == 1) {
+            return candidates.get(0);
+        }
+        if (timeoutMs <= 0) timeoutMs = 2500;
+
+        final int limit = Math.min(candidates.size(), 5);
+        List<VpnServer> alive = benchmarkBatchSync(candidates.subList(0, limit), timeoutMs);
+        if (!alive.isEmpty()) {
+            VpnServer picked = alive.get(0);
+            AppLogger.i(TAG, "⚡ preflightTelegramPingSync: Picked responsive node "
+                    + picked.getDisplayName() + " [" + picked.getHost() + ":" + picked.getPort()
+                    + "] (SNI: " + picked.getSni() + ", delay: " + picked.getPingMs() + "ms, batchAlive=" + alive.size() + ")");
+            return picked;
+        }
         return null;
     }
 }

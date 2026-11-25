@@ -109,9 +109,6 @@ public class AppTelemetryClient {
                             .edit()
                             .putBoolean(PREF_REMOTE_LOGGING, enabled)
                             .apply();
-                    if (enabled) {
-                        NetworkPreferences.getInstance(appContext).setUserLoggingConsentGranted(true);
-                    }
                 } catch (Exception ignored) {}
             }
             AppLogger.onRemoteLoggingStateChanged(enabled);
@@ -283,10 +280,8 @@ public class AppTelemetryClient {
         init(context);
         final Context targetCtx = (context != null) ? context.getApplicationContext() : appContext;
         if (targetCtx != null && !NetworkPreferences.getInstance(targetCtx).isUserLoggingConsentGranted()) {
-            if (!remoteLoggingEnabled) {
-                Log.d(TAG, "sendBatchLogs skipped: user consent not granted and remote logging disabled");
-                return false;
-            }
+            Log.d(TAG, "sendBatchLogs skipped: user consent not granted");
+            return false;
         }
 
         HttpURLConnection conn = null;
@@ -450,14 +445,19 @@ public class AppTelemetryClient {
             public void run() {
                 HttpURLConnection conn = null;
                 try {
+                    int effPing = latencyMs > 0 ? latencyMs : server.getPingMs();
+                    if (effPing <= 0) {
+                        return;
+                    }
                     String clientId = getOrCreateClientId(currentContext);
                     JSONObject json = new JSONObject();
                     json.put("client_id", clientId);
+                    json.put("server_id", server.getServerKey());
                     json.put("server_host", server.getHost() != null ? server.getHost() : "");
-                    json.put("server_port", server.getPort());
+                    json.put("port", server.getPort());
                     json.put("country", server.getCountry() != null ? server.getCountry() : "");
                     json.put("flag", server.getFlag() != null ? server.getFlag() : "");
-                    json.put("latency_ms", latencyMs > 0 ? latencyMs : server.getPingMs());
+                    json.put("latency_ms", effPing);
                     json.put("speed_kbps", speedKbps);
                     json.put("timestamp", System.currentTimeMillis());
 

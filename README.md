@@ -17,7 +17,7 @@
 
 <p align="center">
   <img src=".github/badges/android.svg" alt="Android Version" />
-  <a href="https://www.virustotal.com/gui/file/efe06982822c9e8d43046e094418a684d0acdb5c1eeeb529690c650daa27e929" target="_blank" rel="noopener noreferrer"><img src=".github/badges/virustotal.svg" alt="VirusTotal: 0/72 Clean" /></a>
+  <a href="https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503" target="_blank" rel="noopener noreferrer"><img src=".github/badges/virustotal.svg" alt="VirusTotal: 0/72 Clean" /></a>
   <img src=".github/badges/privacy.svg" alt="Privacy" />
   <img src=".github/badges/trackers.svg" alt="Trackers" />
   <img src=".github/badges/encryption.svg" alt="Encryption" />
@@ -52,9 +52,9 @@
 
 | Параметр | Значение |
 | :--- | :--- |
-| **Результат сканирования** | **[0 / 72 угроз — 100% Чисто (Clean)](https://www.virustotal.com/gui/file/efe06982822c9e8d43046e094418a684d0acdb5c1eeeb529690c650daa27e929)** |
-| **Хэш релиза (SHA-256)** | `efe06982822c9e8d43046e094418a684d0acdb5c1eeeb529690c650daa27e929` |
-| **Официальный отчет** | [Открыть отчет на VirusTotal ↗](https://www.virustotal.com/gui/file/efe06982822c9e8d43046e094418a684d0acdb5c1eeeb529690c650daa27e929) |
+| **Результат сканирования** | **[0 / 72 угроз — 100% Чисто (Clean)](https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503)** |
+| **Хэш релиза (SHA-256)** | `8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503` |
+| **Официальный отчет** | [Открыть отчет на VirusTotal ↗](https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503) |
 
 > 💡 **Как проверить самостоятельно:** Вы можете загрузить APK на [VirusTotal.com](https://www.virustotal.com) или скопировать SHA-256 и проверить файл в один клик.
 
@@ -77,7 +77,7 @@
 
 ---
 
-## ⚡ Особенности версии 2.8.2 (Сборка 66)
+## ⚡ Особенности версии 2.8.2 (Сборка 67)
 
 * **Мгновенное подключение:** старт и поднятие защищенного туннеля всего за 2–3 секунды.
 * **Smart Failover:** автоматический интеллектуальный подбор и ротация резервных узлов при смене Wi-Fi на мобильную сеть.

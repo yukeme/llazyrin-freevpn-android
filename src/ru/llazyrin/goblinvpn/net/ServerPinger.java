@@ -549,11 +549,11 @@ public class ServerPinger {
      */
     public static int measureRealProxyDelay(final VpnServer server, int timeoutMs) {
         if (server == null) return -1;
-        final long overallBudgetMs = (timeoutMs > 0 && timeoutMs <= 4000) ? timeoutMs : 2500L;
+        final long overallBudgetMs = (timeoutMs > 0 && timeoutMs <= 8000) ? timeoutMs : 3200L;
         final long startMs = System.nanoTime() / 1_000_000L;
 
         // 0. Instant Socket Preflight: if raw TCP socket is blocked/unreachable, fail fast
-        int preflightCapMs = (int) Math.min(950L, overallBudgetMs);
+        int preflightCapMs = (int) Math.min(1100L, overallBudgetMs);
         if (!pingSocketDirectFast(server.getHost(), server.getPort(), preflightCapMs)) {
             server.setAlive(false);
             server.setPingMs(-1);
@@ -859,7 +859,7 @@ public class ServerPinger {
         if (batch == null || batch.isEmpty()) {
             return sortedAlive;
         }
-        final int effTimeout = (timeoutMs > 0) ? timeoutMs : 2500;
+        final int effTimeout = (timeoutMs > 0) ? timeoutMs : 3500;
         final List<VpnServer> slice = new ArrayList<>();
         for (VpnServer s : batch) {
             if (s != null) slice.add(s);
@@ -889,7 +889,7 @@ public class ServerPinger {
         }
 
         try {
-            latch.await(effTimeout + 300L, TimeUnit.MILLISECONDS);
+            latch.await(effTimeout + 500L, TimeUnit.MILLISECONDS);
         } catch (InterruptedException ignored) {}
 
         if (!responsive.isEmpty()) {

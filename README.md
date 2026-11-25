@@ -17,7 +17,7 @@
 
 <p align="center">
   <img src=".github/badges/android.svg" alt="Android Version" />
-  <a href="https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503" target="_blank" rel="noopener noreferrer"><img src=".github/badges/virustotal.svg" alt="VirusTotal: 0/72 Clean" /></a>
+  <a href="https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503" target="_blank" rel="noopener noreferrer"><img src=".github/badges/virustotal.svg" alt="VirusTotal: 0/66 Clean" /></a>
   <img src=".github/badges/privacy.svg" alt="Privacy" />
   <img src=".github/badges/trackers.svg" alt="Trackers" />
   <img src=".github/badges/encryption.svg" alt="Encryption" />
@@ -48,11 +48,11 @@
 
 ### 🛡️ Независимая проверка безопасности (VirusTotal)
 
-Каждая официальная сборка llazyrinVPN проходит проверку 72 независимыми антивирусными движками (Kaspersky, Dr.Web, Microsoft Defender, BitDefender, ESET, Avast, Sophos и др.):
+Каждая официальная сборка llazyrinVPN проходит проверку 66 независимыми антивирусными движками (Kaspersky, Dr.Web, Microsoft Defender, BitDefender, ESET, Avast, Sophos и др.):
 
 | Параметр | Значение |
 | :--- | :--- |
-| **Результат сканирования** | **[0 / 72 угроз — 100% Чисто (Clean)](https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503)** |
+| **Результат сканирования** | **[0 / 66 угроз — 100% Чисто (Clean)](https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503)** |
 | **Хэш релиза (SHA-256)** | `8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503` |
 | **Официальный отчет** | [Открыть отчет на VirusTotal ↗](https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503) |
 

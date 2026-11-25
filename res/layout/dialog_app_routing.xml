@@ -14,21 +14,22 @@
         android:layout_marginBottom="12dp"
         android:background="@drawable/bg_sheet_handle" />
 
-    <!-- Dialog Header: Cleanly Constrained, No Text Collisions -->
+    <!-- Header: 8dp grid aligned, zero text clipping -->
     <RelativeLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingStart="16dp"
+        android:paddingTop="4dp"
         android:paddingEnd="16dp"
-        android:paddingBottom="10dp">
+        android:paddingBottom="12dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_alignParentStart="true"
-            android:layout_toStartOf="@+id/btnCloseAppRouting"
-            android:layout_marginEnd="12dp"
             android:layout_centerVertical="true"
+            android:layout_marginEnd="12dp"
+            android:layout_toStartOf="@+id/btnCloseAppRouting"
             android:orientation="vertical">
 
             <TextView
@@ -44,8 +45,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:ellipsize="end"
-                android:maxLines="1"
+                android:lineSpacingExtra="2dp"
+                android:maxLines="2"
                 android:text="Раздельное туннелирование"
                 android:textColor="#FFFFFF"
                 android:textSize="16sp"
@@ -72,15 +73,15 @@
         </FrameLayout>
     </RelativeLayout>
 
-    <!-- 3-Segmented Mode Switcher: ВЫКЛ | ВКЛ | ОБХОД with Morphing Capsule -->
+    <!-- 3-Segmented Mode Switcher: ВЫКЛ | ВКЛ | ОБХОД (Flat M3 Surface) -->
     <FrameLayout
         android:id="@+id/layoutModeContainer"
         android:layout_width="match_parent"
-        android:layout_height="42dp"
+        android:layout_height="44dp"
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
-        android:layout_marginBottom="8dp"
-        android:background="@drawable/bg_m3_segmented_bg"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/bg_m3_segmented_flat"
         android:padding="3dp">
 
         <!-- Animated Morphing Capsule Indicator -->
@@ -89,7 +90,7 @@
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_gravity="center_vertical|start"
-            android:background="@drawable/bg_m3_nav_pill_active" />
+            android:background="@drawable/bg_m3_segment_pill_flat" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -143,16 +144,16 @@
         </LinearLayout>
     </FrameLayout>
 
-    <!-- Mode Description Card: Concise & Crystal Clear -->
+    <!-- Mode Description Card: Unified Flat Card -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
-        android:layout_marginBottom="10dp"
-        android:background="@drawable/bg_m3_metrics_card"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/bg_m3_server_card"
         android:orientation="vertical"
-        android:padding="10dp">
+        android:padding="12dp">
 
         <TextView
             android:id="@+id/tvModeTitle"
@@ -160,17 +161,18 @@
             android:layout_height="wrap_content"
             android:text="Режим: Туннель для всех (ВЫКЛ)"
             android:textColor="#10B981"
-            android:textSize="12.5sp"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/tvModeDescription"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
+            android:layout_marginTop="4dp"
+            android:lineSpacingExtra="2dp"
             android:text="VPN шифрует трафик всех программ без исключений."
             android:textColor="#94A3B8"
-            android:textSize="11sp" />
+            android:textSize="11.5sp" />
     </LinearLayout>
 
     <!-- Category Filter Bar (Grid/Horizontal Aligned) -->
@@ -346,24 +348,24 @@
         </LinearLayout>
     </HorizontalScrollView>
 
-    <!-- Search Input Bar & Count Badge -->
+    <!-- Search Input Bar & Count Badge (40dp uniform height) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
-        android:layout_marginBottom="8dp"
+        android:layout_marginBottom="10dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
         <LinearLayout
             android:layout_width="0dp"
-            android:layout_height="38dp"
+            android:layout_height="40dp"
             android:layout_weight="1"
             android:background="@drawable/bg_search_box"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="10dp"
+            android:paddingStart="12dp"
             android:paddingEnd="10dp">
 
             <ImageView
@@ -390,8 +392,8 @@
 
             <TextView
                 android:id="@+id/btnClearSearch"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
@@ -404,16 +406,15 @@
         <TextView
             android:id="@+id/tvSelectedCount"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
-            android:background="@drawable/bg_m3_badge_emerald"
-            android:paddingStart="8dp"
-            android:paddingTop="4dp"
-            android:paddingEnd="8dp"
-            android:paddingBottom="4dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_m3_chip_active"
+            android:gravity="center"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
             android:text="Выбрано: 0"
             android:textColor="#10B981"
-            android:textSize="11sp"
+            android:textSize="11.5sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -427,9 +428,12 @@
             android:id="@+id/lvInstalledApps"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:clipToPadding="false"
             android:divider="#14FFFFFF"
             android:dividerHeight="1dp"
             android:fastScrollEnabled="true"
+            android:paddingTop="4dp"
+            android:paddingBottom="8dp"
             android:scrollbarThumbVertical="@drawable/bg_sheet_handle" />
 
         <ProgressBar
@@ -450,15 +454,15 @@
             android:visibility="gone" />
     </FrameLayout>
 
-    <!-- Bottom Apply & Save Button -->
+    <!-- Bottom Apply & Save Bar (Clean Flat Bar, Zero Gradient) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@drawable/bg_m3_bottom_nav"
+        android:background="@drawable/bg_m3_sheet_footer_flat"
         android:paddingStart="16dp"
         android:paddingTop="12dp"
         android:paddingEnd="16dp"
-        android:paddingBottom="14dp">
+        android:paddingBottom="16dp">
 
         <TextView
             android:id="@+id/btnSaveAppRouting"

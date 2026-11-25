@@ -181,7 +181,7 @@ public class CommunityPoolManager {
             if (arr != null) {
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject obj = arr.getJSONObject(i);
-                    String rawUri = obj.optString("rawUri", obj.optString("uri", ""));
+                    String rawUri = obj.optString("raw_uri", obj.optString("rawUri", obj.optString("uri", "")));
                     if (rawUri.isEmpty()) continue;
 
                     VpnServer s = VpnSubscriptionClient.parseVlessLine(rawUri);
@@ -190,11 +190,14 @@ public class CommunityPoolManager {
                         int port = obj.optInt("port", 443);
                         String flag = obj.optString("flag", "⭐");
                         String country = obj.optString("country", "Топ узел");
-                        String remark = obj.optString("remark", "⭐ Топ сообщества");
-                        int ping = obj.optInt("pingMs", 45);
+                        String remark = obj.optString("remark", obj.optString("name", "⭐ Топ сообщества"));
+                        int ping = obj.optInt("ping", obj.optInt("pingMs", 45));
                         String sni = obj.optString("sni", host);
                         String sec = obj.optString("security", "reality");
                         s = new VpnServer(rawUri, host, port, flag, country, remark, ping, sni, sec);
+                    } else {
+                        int ping = obj.optInt("ping", obj.optInt("pingMs", 0));
+                        if (ping >= 20) s.setPingMs(ping);
                     }
 
                     if (s != null && !MainActivity.isKnownDeadHost(s.getHost())) {
@@ -252,9 +255,16 @@ public class CommunityPoolManager {
      */
     public void shareStableServerAsync(final VpnServer server, final int pingMs, final long uptimeSec, final long rxBytes) {
         if (server == null || server.getRawUri() == null || server.getHost() == null) return;
+        if (!ru.llazyrin.goblinvpn.model.NetworkPreferences.getInstance(appContext).isShareWithCommunityEnabled()) {
+            return;
+        }
+        if (MainActivity.isKnownDeadHost(server.getHost()) || pingMs <= 0 || !server.getRawUri().startsWith("vless://")) {
+            return;
+        }
 
         final String host = server.getHost();
-        long lastShare = prefs.getLong(KEY_LAST_SHARE_PREFIX + host, 0);
+        final String shareKey = server.getServerKey();
+        long lastShare = prefs.getLong(KEY_LAST_SHARE_PREFIX + shareKey, 0);
         long now = System.currentTimeMillis();
         if (now - lastShare < 12 * 60 * 60 * 1000L) {
             return; // Already shared within last 12 hours
@@ -265,15 +275,24 @@ public class CommunityPoolManager {
             public void run() {
                 HttpURLConnection conn = null;
                 try {
+                    long speedKbps = (uptimeSec > 0 && rxBytes > 0) ? Math.max(1L, (rxBytes / 1024L) / uptimeSec) : 0L;
                     JSONObject payload = new JSONObject();
+                    payload.put("server_id", shareKey);
+                    payload.put("server_host", host);
+                    payload.put("client_id", AppTelemetryClient.getOrCreateClientId(appContext));
+                    payload.put("raw_uri", server.getRawUri());
                     payload.put("rawUri", server.getRawUri());
-                    payload.put("host", server.getHost());
+                    payload.put("host", host);
                     payload.put("port", server.getPort());
                     payload.put("country", server.getCountry());
+                    payload.put("name", server.getDisplayName());
+                    payload.put("latency_ms", pingMs);
                     payload.put("pingMs", pingMs);
+                    payload.put("speed_kbps", speedKbps);
+                    payload.put("rating", pingMs < 150 ? 5.0 : 4.8);
                     payload.put("uptimeSec", uptimeSec);
                     payload.put("rxBytes", rxBytes);
-                    payload.put("appVersion", "2.7.5");
+                    payload.put("appVersion", AppUpdateManager.getAppVersionName(appContext));
 
                     URL url = new URL(SHARE_SERVER_URL);
                     conn = (HttpURLConnection) url.openConnection();
@@ -292,7 +311,7 @@ public class CommunityPoolManager {
 
                     int resCode = conn.getResponseCode();
                     if (resCode == 200 || resCode == 201) {
-                        prefs.edit().putLong(KEY_LAST_SHARE_PREFIX + host, System.currentTimeMillis()).apply();
+                        prefs.edit().putLong(KEY_LAST_SHARE_PREFIX + shareKey, System.currentTimeMillis()).apply();
                         AppLogger.i(TAG, "🌟 Successfully shared stable node [" + server.getDisplayName()
                                 + "] with community! (res=" + resCode + ")");
                     }

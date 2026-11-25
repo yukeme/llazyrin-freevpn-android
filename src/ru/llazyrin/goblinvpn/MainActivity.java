@@ -290,6 +290,10 @@ public class MainActivity extends Activity {
         public void onReceive(Context context, Intent intent) {
             if (GoblinVpnService.ACTION_STATE_CHANGED.equals(intent.getAction())) {
                 String stateName = intent.getStringExtra(GoblinVpnService.EXTRA_STATE);
+                String errMsg = intent.getStringExtra(GoblinVpnService.EXTRA_ERROR_MESSAGE);
+                if (errMsg != null && !errMsg.trim().isEmpty()) {
+                    Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show();
+                }
                 if (stateName != null) {
                     try {
                         currentState = VpnState.valueOf(stateName);
@@ -2167,10 +2171,23 @@ public class MainActivity extends Activity {
         startIntent.setAction(GoblinVpnService.ACTION_CONNECT);
 
         if (isAutoMode && isCellular) {
+            // Sticky-Mobile architecture: reuse remembered working cellular node first until it fails
             VpnServer preVerified = null;
             try {
                 preVerified = AutoSwitchEngine.getInstance(this).peekVerifiedCellularServer();
             } catch (Throwable ignored) {}
+            if (preVerified == null) {
+                try {
+                    VpnServer sticky = MobileProvenConfigStorage.getInstance(this).getStickyMobileServer();
+                    if (sticky != null
+                            && !AutoSwitchEngine.getInstance(this).isServerInCooldown(sticky.getServerKey())
+                            && !ServerPenaltyManager.getInstance(this).isPenalized(sticky.getServerKey())) {
+                        preVerified = sticky;
+                        AppLogger.i("MainActivity", "⚡ [StickyMobile] Connecting directly to remembered cellular node: "
+                                + sticky.getDisplayName() + " [" + sticky.getServerKey() + "] (no re-probe needed)");
+                    }
+                } catch (Throwable ignored) {}
+            }
             if (preVerified != null) {
                 startIntent.putExtra(GoblinVpnService.EXTRA_SERVER, preVerified);
             } else {
@@ -2228,13 +2245,8 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
 
         if (!isAutoMode && selectedServer != null && !isKnownDeadHost(selectedServer.getHost())) {
-            if (isCellular && ("193.233.199.233".equals(selectedServer.getHost())
-                    || !WhitelistPoolManager.getInstance(this).isWhitelistedForMobile(selectedServer.getHost()))) {
-                AppLogger.w("MainActivity", "Selected server " + selectedServer.getHost()
-                        + " is foreign / not whitelisted for cellular TSPU bypass! Forcing selection from mobile bypass pool.");
-            } else {
-                return selectedServer;
-            }
+            // Strictly respect manual server selection: never silently override user's chosen server
+            return selectedServer;
         }
 
         // =========================================================================
@@ -2242,10 +2254,15 @@ public class MainActivity extends Activity {
         // =========================================================================
         if (isCellular) {
             // ---------------------------------------------------------------------
-            // TIER 0: PERSONAL PROVEN WORKING SERVERS ON CELLULAR (HISTORICAL STASH)
-            // Instant selection without re-testing or ping delays (0 ms)!
+            // TIER 0: STICKY / PROVEN WORKING SERVER ON CELLULAR
             // ---------------------------------------------------------------------
             try {
+                VpnServer sticky = MobileProvenConfigStorage.getInstance(this).getStickyMobileServer();
+                if (sticky != null && !isKnownDeadHost(sticky.getHost())
+                        && !AutoSwitchEngine.getInstance(this).isServerInCooldown(sticky.getServerKey())
+                        && !ServerPenaltyManager.getInstance(this).isPenalized(sticky.getServerKey())) {
+                    return sticky;
+                }
                 List<VpnServer> provenList = MobileProvenConfigStorage.getInstance(this).getProvenMobileServers();
                 if (provenList != null && !provenList.isEmpty()) {
                     for (VpnServer ps : provenList) {
@@ -2542,6 +2559,10 @@ public class MainActivity extends Activity {
 
     private void switchToCellularAutoWaves() {
         if (currentState == VpnState.CONNECTED || currentState == VpnState.CONNECTING) {
+            // User explicitly triggered fresh "Автовыбор": clear sticky so waves re-discover fastest node
+            try {
+                MobileProvenConfigStorage.getInstance(this).clearStickyServerKey();
+            } catch (Throwable ignored) {}
             Toast.makeText(this, "⚡ Подбор лучшего мобильного узла…", Toast.LENGTH_SHORT).show();
             NetworkPreferences prefs = NetworkPreferences.getInstance(this);
             Intent startIntent = new Intent(this, GoblinVpnService.class);

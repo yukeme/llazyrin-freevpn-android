@@ -74,6 +74,10 @@
                     android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_centerInParent="true"
+                    android:layout_toEndOf="@+id/btnGoblinBadge"
+                    android:layout_toStartOf="@+id/btnSupport"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginEnd="8dp"
                     android:background="@drawable/bg_m3_status_pill_off"
                     android:gravity="center"
                     android:orientation="horizontal"
@@ -110,8 +114,7 @@
                         android:layout_height="wrap_content"
                         android:text="Не защищено"
                         android:textColor="@color/m3_text_secondary"
-                        android:textSize="11sp"
-                        android:typeface="monospace" />
+                        android:textSize="11sp" />
                 </LinearLayout>
 
                 <!-- Right Shield / Security Button (38x38dp) -->
@@ -539,7 +542,7 @@
                 </FrameLayout>
             </FrameLayout>
 
-            <!-- 4. Server Selector Card: 8dp Grid Aligned & Responsive (w = match_parent with 16dp margins, minHeight = 64dp) -->
+            <!-- 4. Server Selector Card: 8dp Grid Aligned & Responsive (minHeight = 64dp, zero top-edge shift) -->
             <LinearLayout
                 android:id="@+id/cardServerSelector"
                 android:layout_width="match_parent"
@@ -573,15 +576,17 @@
                         android:textSize="18sp" />
                 </FrameLayout>
 
-                <!-- Server Info: 2 clean non-wrapping rows -->
+                <!-- Server Info: 2 clean vertically-centered rows -->
                 <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
+                    android:layout_marginEnd="8dp"
                     android:layout_weight="1"
+                    android:gravity="center_vertical"
                     android:orientation="vertical">
 
-                    <!-- Row 1: Country Name + Badge (8dp grid aligned & non-wrapping) -->
+                    <!-- Row 1: Country Name + Badge (never wraps badge!) -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -595,7 +600,8 @@
                             android:layout_weight="1"
                             android:singleLine="true"
                             android:ellipsize="end"
-                            android:text="Автовыбор"
+                            android:includeFontPadding="false"
+                            android:text="Германия #1"
                             android:textColor="#FFFFFF"
                             android:textSize="14sp"
                             android:textStyle="bold" />
@@ -605,13 +611,15 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="8dp"
-                            android:visibility="gone"
                             android:background="@drawable/bg_m3_badge_emerald"
+                            android:gravity="center"
+                            android:includeFontPadding="false"
                             android:paddingStart="6dp"
                             android:paddingTop="2dp"
                             android:paddingEnd="6dp"
                             android:paddingBottom="2dp"
-                            android:text="ТОП"
+                            android:singleLine="true"
+                            android:text="АВТОВЫБОР"
                             android:textColor="#6EE7B7"
                             android:textSize="9sp"
                             android:textStyle="bold" />
@@ -619,7 +627,7 @@
 
                     <!-- Row 2: City and Ping in single line -->
                     <LinearLayout
-                        android:layout_width="match_parent"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
                         android:gravity="center_vertical"
@@ -627,9 +635,8 @@
 
                         <TextView
                             android:id="@+id/tvCardCity"
-                            android:layout_width="0dp"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
                             android:singleLine="true"
                             android:ellipsize="end"
                             android:text="Оптимальный"
@@ -732,10 +739,10 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:layout_below="@id/headerBar"
-            android:layout_alignParentBottom="true"
+            android:layout_above="@+id/bottomNavDock"
             android:clipChildren="false"
             android:clipToPadding="false"
-            android:paddingBottom="100dp"
+            android:paddingBottom="12dp"
             android:fillViewport="true"
             android:overScrollMode="never"
             android:scrollbars="none"
@@ -833,78 +840,6 @@
                             android:gravity="end"
                             android:maxLines="1"
                             android:text="llazyrinReality-Active"
-                            android:textColor="#34D399"
-                            android:textSize="13sp" />
-                    </LinearLayout>
-
-                    <View
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginTop="12dp"
-                        android:layout_marginBottom="12dp"
-                        android:background="#22FFFFFF" />
-
-                    <!-- Step 3: Promo Code Row -->
-                    <LinearLayout
-                        android:id="@+id/rowPromoCode"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="🎁 Промокод"
-                            android:textColor="#F2F7F2"
-                            android:textSize="13sp" />
-
-                        <TextView
-                            android:id="@+id/tvPromoCodeBadge"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="12dp"
-                            android:layout_weight="1"
-                            android:gravity="end"
-                            android:text="Активировать ›"
-                            android:textColor="#34D399"
-                            android:textSize="13sp" />
-                    </LinearLayout>
-
-                    <View
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginTop="12dp"
-                        android:layout_marginBottom="12dp"
-                        android:background="#22FFFFFF" />
-
-                    <!-- Step 3: User Devices (3 Slots) Row -->
-                    <LinearLayout
-                        android:id="@+id/rowUserDevices"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="📱 Мои устройства"
-                            android:textColor="#F2F7F2"
-                            android:textSize="13sp" />
-
-                        <TextView
-                            android:id="@+id/tvUserDevicesBadge"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="12dp"
-                            android:layout_weight="1"
-                            android:gravity="end"
-                            android:text="3 слота ›"
                             android:textColor="#34D399"
                             android:textSize="13sp" />
                     </LinearLayout>
@@ -1047,9 +982,8 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:ellipsize="end"
-                            android:maxLines="1"
-                            android:text="Смена узла при скачках пинга (>280 мс) или обрыве"
+                            android:maxLines="2"
+                            android:text="Смена узла при скачках пинга или обрыве"
                             android:textColor="#7A8C7D"
                             android:textSize="11.5sp" />
                     </LinearLayout>
@@ -1078,7 +1012,8 @@
                 <LinearLayout
                     android:id="@+id/rowVipBoost"
                     android:layout_width="match_parent"
-                    android:layout_height="54dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="58dp"
                     android:layout_marginBottom="10dp"
                     android:background="@drawable/bg_m3_server_card"
                     android:clickable="true"
@@ -1086,32 +1021,37 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
                     android:paddingStart="16dp"
-                    android:paddingEnd="16dp">
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
 
-                    <TextView
+                    <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:ellipsize="end"
-                        android:maxLines="1"
-                        android:text="@string/settings_row_vip"
-                        android:textColor="#F2F7F2"
-                        android:textSize="14.5sp" />
+                        android:orientation="vertical">
 
-                    <TextView
-                        android:id="@+id/tvVipSettingsStatus"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:layout_marginEnd="6dp"
-                        android:text="Выкл"
-                        android:textColor="#E3B341"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_row_vip"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp" />
+
+                        <TextView
+                            android:id="@+id/tvVipSettingsStatus"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Не активен"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
 
                     <ImageView
                         android:layout_width="16dp"
                         android:layout_height="16dp"
+                        android:layout_marginStart="8dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_chevron_right"
                         android:tint="#7F9182" />
@@ -1121,7 +1061,8 @@
                 <LinearLayout
                     android:id="@+id/rowEmergencyReserve"
                     android:layout_width="match_parent"
-                    android:layout_height="54dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="58dp"
                     android:layout_marginBottom="10dp"
                     android:background="@drawable/bg_m3_server_card"
                     android:clickable="true"
@@ -1129,32 +1070,37 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
                     android:paddingStart="16dp"
-                    android:paddingEnd="16dp">
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
 
-                    <TextView
+                    <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:ellipsize="end"
-                        android:maxLines="1"
-                        android:text="@string/settings_row_reserve"
-                        android:textColor="#F2F7F2"
-                        android:textSize="14.5sp" />
+                        android:orientation="vertical">
 
-                    <TextView
-                        android:id="@+id/tvReserveStatus"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:layout_marginEnd="6dp"
-                        android:text="Готов"
-                        android:textColor="#34D399"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_row_reserve"
+                            android:textColor="#F2F7F2"
+                            android:textSize="14.5sp" />
+
+                        <TextView
+                            android:id="@+id/tvReserveStatus"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="10 резервных узлов"
+                            android:textColor="#34D399"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
 
                     <ImageView
                         android:layout_width="16dp"
                         android:layout_height="16dp"
+                        android:layout_marginStart="8dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_chevron_right"
                         android:tint="#7F9182" />
@@ -1329,7 +1275,158 @@
                         android:tint="#7F9182" />
                 </LinearLayout>
 
-                <!-- Row 5: Get Access Key -->
+                                <!-- Row: Support & Donate (SBP Ozon) -->
+                <LinearLayout
+                    android:id="@+id/rowDonate"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="58dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <ImageView
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:layout_marginEnd="12dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_heart_donate" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Поддержать проект (Донат)"
+                                android:textColor="#F2F7F2"
+                                android:textSize="14.5sp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:background="@drawable/bg_m3_badge_amber"
+                                android:paddingStart="6dp"
+                                android:paddingTop="1dp"
+                                android:paddingEnd="6dp"
+                                android:paddingBottom="1dp"
+                                android:text="СБП"
+                                android:textColor="#F59E0B"
+                                android:textSize="10.5sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Ozon Банк • СБП • Помощь в оплате серверов"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+                <!-- Row: GitHub Repository -->
+                <LinearLayout
+                    android:id="@+id/rowGitHub"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="58dp"
+                    android:layout_marginBottom="10dp"
+                    android:background="@drawable/bg_m3_server_card"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="10dp">
+
+                    <ImageView
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:layout_marginEnd="12dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_github_mark"
+                        android:tint="#E2E8F0" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Исходный код на GitHub"
+                                android:textColor="#F2F7F2"
+                                android:textSize="14.5sp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:background="@drawable/bg_m3_badge_emerald"
+                                android:paddingStart="6dp"
+                                android:paddingTop="1dp"
+                                android:paddingEnd="6dp"
+                                android:paddingBottom="1dp"
+                                android:text="Open Source"
+                                android:textColor="#10B981"
+                                android:textSize="10.5sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="yukeme/llazyrin-freevpn-android"
+                            android:textColor="#7A8C7D"
+                            android:textSize="11.5sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_right"
+                        android:tint="#7F9182" />
+                </LinearLayout>
+
+<!-- Row 5: Get Access Key -->
                 <LinearLayout
                     android:id="@+id/rowGetAccessKey"
                     android:layout_width="match_parent"

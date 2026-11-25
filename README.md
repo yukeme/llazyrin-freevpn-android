@@ -17,7 +17,7 @@
 
 <p align="center">
   <img src=".github/badges/android.svg" alt="Android Version" />
-  <a href="https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503" target="_blank" rel="noopener noreferrer"><img src=".github/badges/virustotal.svg" alt="VirusTotal: 0/66 Clean" /></a>
+  <a href="https://www.virustotal.com/gui/file/e39328a3c2e0f2fd9f729455580c4453e6666804be8ceaea0b51440652cde843" target="_blank" rel="noopener noreferrer"><img src=".github/badges/virustotal.svg" alt="VirusTotal: 0/65 Clean" /></a>
   <img src=".github/badges/privacy.svg" alt="Privacy" />
   <img src=".github/badges/trackers.svg" alt="Trackers" />
   <img src=".github/badges/encryption.svg" alt="Encryption" />
@@ -48,13 +48,13 @@
 
 ### 🛡️ Независимая проверка безопасности (VirusTotal)
 
-Каждая официальная сборка llazyrinVPN проходит проверку 66 независимыми антивирусными движками (Kaspersky, Dr.Web, Microsoft Defender, BitDefender, ESET, Avast, Sophos и др.):
+Каждая официальная сборка llazyrinVPN проходит проверку независимыми антивирусными движками (Kaspersky, Dr.Web, Microsoft Defender, BitDefender, ESET, Avast, Sophos и др.):
 
 | Параметр | Значение |
 | :--- | :--- |
-| **Результат сканирования** | **[0 / 66 угроз — 100% Чисто (Clean)](https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503)** |
-| **Хэш релиза (SHA-256)** | `8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503` |
-| **Официальный отчет** | [Открыть отчет на VirusTotal ↗](https://www.virustotal.com/gui/file/8e78703faf193d7ca9ad490753edd365988bf71975803798a608394cd64b1503) |
+| **Результат сканирования** | **[0 / 65 угроз — 100% Чисто (Clean)](https://www.virustotal.com/gui/file/e39328a3c2e0f2fd9f729455580c4453e6666804be8ceaea0b51440652cde843)** |
+| **Хэш релиза (SHA-256)** | `e39328a3c2e0f2fd9f729455580c4453e6666804be8ceaea0b51440652cde843` |
+| **Официальный отчет** | [Открыть отчет на VirusTotal ↗](https://www.virustotal.com/gui/file/e39328a3c2e0f2fd9f729455580c4453e6666804be8ceaea0b51440652cde843) |
 
 > 💡 **Как проверить самостоятельно:** Вы можете загрузить APK на [VirusTotal.com](https://www.virustotal.com) или скопировать SHA-256 и проверить файл в один клик.
 
@@ -77,8 +77,9 @@
 
 ---
 
-## ⚡ Особенности версии 2.8.2 (Сборка 67)
+## ⚡ Особенности версии 2.8.2 (Сборка 68)
 
+* **Точный автоподбор на сотовой сети:** исправлено определение активной сотовой сети при Smart Switch, устранено сужение волн до 1 узла, оптимизировано время волновых проб (`3.8с`) и приоритезация стабильных мобильных SNI.
 * **Мгновенное подключение:** старт и поднятие защищенного туннеля всего за 2–3 секунды.
 * **Smart Failover:** автоматический интеллектуальный подбор и ротация резервных узлов при смене Wi-Fi на мобильную сеть.
 * **Server Memory:** кэширование проверенных рабочих конфигураций в защищенном хранилище для моментального реконнекта.

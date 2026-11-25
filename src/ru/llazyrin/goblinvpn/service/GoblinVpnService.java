@@ -67,6 +67,7 @@ public class GoblinVpnService extends VpnService {
     public static final String EXTRA_SERVER = "extra_server";
     public static final String EXTRA_STATE = "extra_state";
     public static final String EXTRA_RESTRICTED_TELEGRAM_ONLY = "extra_restricted_telegram_only";
+    public static final String EXTRA_AUTO_WAVE_SELECT = "extra_auto_wave_select";
 
     private static final String CHANNEL_ID = "goblin_vpn_channel";
     private static final int NOTIFICATION_ID = 1001;
@@ -95,6 +96,21 @@ public class GoblinVpnService extends VpnService {
     private static volatile long lastNotifTimeMs = 0;
     private static volatile long lastSpeedRx = 0;
     private static volatile long lastSpeedTx = 0;
+    private static volatile String connectionStageHint = null;
+    private volatile AtomicBoolean waveCancelToken = new AtomicBoolean(false);
+
+    public static String getConnectionStageHint() {
+        return connectionStageHint;
+    }
+
+    public static void setConnectionStageHint(String hint) {
+        connectionStageHint = hint;
+        GoblinVpnService instance = activeInstance;
+        if (instance != null && currentState == VpnState.CONNECTING) {
+            instance.updateNotification(hint);
+            instance.broadcastStateOnly();
+        }
+    }
 
     public static long getInitialRxBytes() {
         return initialUidRxBytes;
@@ -358,7 +374,8 @@ public class GoblinVpnService extends VpnService {
                 Log.w(TAG, "Failed to parse EXTRA_SERVER from intent", e);
             }
             boolean restrictedTelegram = intent.getBooleanExtra(EXTRA_RESTRICTED_TELEGRAM_ONLY, false);
-            connect(server, restrictedTelegram);
+            boolean autoWaveSelect = intent.getBooleanExtra(EXTRA_AUTO_WAVE_SELECT, false);
+            connect(server, restrictedTelegram, autoWaveSelect);
         } else if (ACTION_DISCONNECT.equals(action)) {
             disconnect();
         } else if (ACTION_RESTORE_NOTIFICATION.equals(action)) {
@@ -380,22 +397,32 @@ public class GoblinVpnService extends VpnService {
     }
 
     public synchronized void connect(final VpnServer server) {
-        connect(server, false);
+        connect(server, false, false);
     }
 
     public synchronized void connect(final VpnServer server, final boolean restrictedTelegramOnly) {
+        connect(server, restrictedTelegramOnly, false);
+    }
+
+    public synchronized void connect(final VpnServer server, final boolean restrictedTelegramOnly, final boolean autoWaveSelect) {
         final long session = activeSessionId.incrementAndGet();
         stopTunnel();
         activeSessionId.set(session);
         isExplicitUserDisconnect = false;
         this.isRestrictedTelegramOnly = restrictedTelegramOnly;
+        final AtomicBoolean currentWaveCancel = new AtomicBoolean(false);
+        this.waveCancelToken = currentWaveCancel;
         acquireWakeLocks();
 
         currentServer = server;
+        final boolean needWaveResolution = (autoWaveSelect || server == null);
+        connectionStageHint = needWaveResolution ? "Волна 1/4…" : null;
         updateState(VpnState.CONNECTING);
         createNotificationChannel();
 
-        String connectingText = "Подключение к " + (server != null ? server.getDisplayName() : "серверу") + "…";
+        String connectingText = needWaveResolution
+                ? "Подбор быстрого узла…"
+                : ("Подключение к " + server.getDisplayName() + "…");
         Notification notification = buildNotification(connectingText);
 
         boolean foregroundStarted = false;
@@ -423,6 +450,7 @@ public class GoblinVpnService extends VpnService {
 
         if (!foregroundStarted) {
             Log.e(TAG, "Could not start foreground service. Aborting connection.");
+            connectionStageHint = null;
             updateState(VpnState.ERROR);
             stopSelf();
             return;
@@ -434,16 +462,55 @@ public class GoblinVpnService extends VpnService {
             public void run() {
                 boolean initialHandshakeFailed = false;
                 try {
-                    // Ensure Xray core is initialized
+                    // Ensure Xray core is initialized before wave probing or TUN creation
                     initXrayEnvironment();
 
+                    VpnServer targetNode = server;
+                    if (needWaveResolution) {
+                        boolean isCellNow = WhitelistPoolManager.isRunningOnCellular(GoblinVpnService.this);
+                        if (isCellNow) {
+                            targetNode = AutoSwitchEngine.getInstance(GoblinVpnService.this).selectCellularServerByWaves(
+                                    null,
+                                    new AutoSwitchEngine.WaveProgressListener() {
+                                        @Override
+                                        public void onWaveProgress(int waveIndex, int totalWaves, int batchSize) {
+                                            if (isRunning && activeSessionId.get() == session && !currentWaveCancel.get()) {
+                                                setConnectionStageHint("Волна " + waveIndex + "/" + totalWaves + "…");
+                                            }
+                                        }
+                                    },
+                                    currentWaveCancel
+                            );
+                        } else {
+                            targetNode = AutoSwitchEngine.getInstance(GoblinVpnService.this).selectFallbackNonCellularServer();
+                        }
+                        connectionStageHint = null;
+                        if (currentWaveCancel.get() || activeSessionId.get() != session || !isRunning || isExplicitUserDisconnect) {
+                            return;
+                        }
+                        if (targetNode == null) {
+                            AppLogger.e(TAG, "Wave selection yielded no target server. Stopping.");
+                            isRunning = false;
+                            updateState(VpnState.ERROR);
+                            stopForegroundNotification();
+                            stopSelf();
+                            return;
+                        }
+                        currentServer = targetNode;
+                        updateNotification(null);
+                        broadcastStateOnly();
+                    }
+
+                    final VpnServer activeTarget = targetNode;
+
                     synchronized (tunnelLock) {
-                        vpnInterface = establishTunInterface(server);
+                        vpnInterface = establishTunInterface(activeTarget);
                     }
 
                     if (vpnInterface == null) {
                         Log.e(TAG, "Failed to establish VPN interface (null returned from establish)");
                         if (activeSessionId.get() == session) {
+                            isRunning = false;
                             updateState(VpnState.ERROR);
                             stopForegroundNotification();
                             stopSelf();
@@ -463,7 +530,7 @@ public class GoblinVpnService extends VpnService {
                     NetworkPreferences prefs = NetworkPreferences.getInstance(GoblinVpnService.this);
                     boolean bypassRu = prefs.isBypassRuTrafficEnabled();
                     int mtu = 1500;
-                    String configJson = XrayConfigGenerator.generateXrayConfig(server, bypassRu, mtu);
+                    String configJson = XrayConfigGenerator.generateXrayConfig(activeTarget, bypassRu, mtu);
                     Log.i(TAG, "Starting Xray-core loop with generated VLESS Reality configuration...");
 
                     synchronized (tunnelLock) {
@@ -494,8 +561,8 @@ public class GoblinVpnService extends VpnService {
                     }
 
                     // =========================================================================
-                    // FAST INITIAL HANDSHAKE WATCHDOG (Adaptive deadline: 9.0s cellular / 4.5s Wi-Fi)
-                    // Parallelized multi-target in-tunnel verification (Yandex, Telegram API, VK)
+                    // FAST INITIAL HANDSHAKE WATCHDOG (Adaptive deadline: 9.0s cellular / 3.5s Wi-Fi)
+                    // Parallelized multi-target in-tunnel verification (Telegram API, GStatic, Cloudflare)
                     // =========================================================================
                     boolean handshakeOk = false;
                     final long watchdogStartMs = SystemClock.elapsedRealtime();
@@ -503,8 +570,8 @@ public class GoblinVpnService extends VpnService {
                     final long watchdogDeadlineMs = isCellular ? 9000L : 3500L;
 
                     AppLogger.i(TAG, "Starting Initial Handshake Watchdog (" + watchdogDeadlineMs + "ms deadline, cellular="
-                            + isCellular + ") on node " + (server != null ? server.getDisplayName() + " [" + server.getHost() + ":" + server.getPort()
-                            + "] (SNI=" + server.getSni() + ", Tier=" + server.getMobileTier() + ")" : "unknown"));
+                            + isCellular + ") on node " + (activeTarget != null ? activeTarget.getDisplayName() + " [" + activeTarget.getHost() + ":" + activeTarget.getPort()
+                            + "] (SNI=" + activeTarget.getSni() + ", Tier=" + activeTarget.getMobileTier() + ")" : "unknown"));
 
                     final AtomicInteger probeDelay = new AtomicInteger(-1);
                     final AtomicBoolean probeConfirmed = new AtomicBoolean(false);
@@ -578,38 +645,37 @@ public class GoblinVpnService extends VpnService {
                     }
 
                     if (handshakeOk) {
-                        // Record proven working node on cellular network ONLY if global egress (Telegram / Google) succeeded
-                        // Prevents Russian domestic intranet-only nodes (VK) from polluting the proven egress pool
-                        if (isCellular && server != null
-                                && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(server.getSni())
-                                && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileHost(server.getHost())
-                                && (globalEgressConfirmed.get() || !isDomesticOnlySni(server.getSni()))) {
+                        if (isCellular && activeTarget != null
+                                && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(activeTarget.getSni())
+                                && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileHost(activeTarget.getHost())
+                                && (globalEgressConfirmed.get() || !isDomesticOnlySni(activeTarget.getSni()))) {
                             ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage.getInstance(GoblinVpnService.this)
-                                    .recordSuccess(server, probeDelay.get());
-                            ru.llazyrin.goblinvpn.net.WhitelistPoolManager.recordServerPing(server.getServerKey(), probeDelay.get());
+                                    .recordSuccess(activeTarget, probeDelay.get());
+                            ru.llazyrin.goblinvpn.net.WhitelistPoolManager.recordServerPing(activeTarget.getServerKey(), probeDelay.get());
                         }
-                        if (server != null) {
-                            ru.llazyrin.goblinvpn.net.ServerPenaltyManager.getInstance(GoblinVpnService.this).recordSuccess(server.getServerKey());
+                        if (activeTarget != null) {
+                            ru.llazyrin.goblinvpn.net.ServerPenaltyManager.getInstance(GoblinVpnService.this).recordSuccess(activeTarget.getServerKey());
                         }
-                        AutoSwitchEngine.getInstance(GoblinVpnService.this).notifyHandshakeSucceeded(server);
+                        AutoSwitchEngine.getInstance(GoblinVpnService.this).notifyHandshakeSucceeded(activeTarget);
                     } else {
                         initialHandshakeFailed = true;
                         AppLogger.w(TAG, "❌ Initial Handshake FAILED after " + watchdogDeadlineMs
-                                + "ms (target=" + (server != null ? server.getHost() + ":" + server.getPort() + ", SNI=" + server.getSni() : "null")
+                                + "ms (target=" + (activeTarget != null ? activeTarget.getHost() + ":" + activeTarget.getPort() + ", SNI=" + activeTarget.getSni() : "null")
                                 + ", cellular=" + isCellular + "). Triggering instant auto-failover!");
-                        if (isCellular && server != null) {
+                        if (isCellular && activeTarget != null) {
                             ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage.getInstance(GoblinVpnService.this)
-                                    .recordFailure(server.getServerKey());
+                                    .recordFailure(activeTarget.getServerKey());
                         }
-                        AutoSwitchEngine.getInstance(GoblinVpnService.this).onInitialConnectFailed(server);
+                        AutoSwitchEngine.getInstance(GoblinVpnService.this).onInitialConnectFailed(activeTarget);
                         return;
                     }
 
                     if (activeSessionId.get() == session) {
+                        connectionStageHint = null;
                         updateState(VpnState.CONNECTED);
                         String ksSuffix = prefs.isKillSwitchEnabled() ? " • Kill Switch" : "";
                         String dnsSuffix = " • DNS: " + prefs.getDnsOption().getBadge();
-                        updateNotification("Защищенный туннель активен (" + (server != null ? server.getDisplayName() : "VLESS Reality") + ")" + dnsSuffix + ksSuffix);
+                        updateNotification("Защищенный туннель активен (" + (activeTarget != null ? activeTarget.getDisplayName() : "VLESS Reality") + ")" + dnsSuffix + ksSuffix);
                         Log.i(TAG, "VPN tunnel actively routing traffic through Xray-core.");
                     }
 
@@ -824,6 +890,9 @@ public class GoblinVpnService extends VpnService {
     private synchronized void stopTunnel() {
         activeSessionId.incrementAndGet();
         isRunning = false;
+        try {
+            if (waveCancelToken != null) waveCancelToken.set(true);
+        } catch (Throwable ignored) {}
         if (workerThread != null) {
             try {
                 workerThread.interrupt();
@@ -841,6 +910,11 @@ public class GoblinVpnService extends VpnService {
     public void disconnect() {
         Log.i(TAG, "Disconnecting llazyrinVPN service asynchronously...");
         isExplicitUserDisconnect = true;
+        isRunning = false;
+        connectionStageHint = null;
+        try {
+            if (waveCancelToken != null) waveCancelToken.set(true);
+        } catch (Throwable ignored) {}
         activeSessionId.incrementAndGet();
         updateState(VpnState.DISCONNECTED);
         stopForegroundNotification();
@@ -1034,6 +1108,34 @@ public class GoblinVpnService extends VpnService {
         }
     }
 
+    private void broadcastStateOnly() {
+        final VpnState state = currentState;
+        final VpnServer srv = currentServer;
+        final StateListener listener = stateListener;
+        if (listener != null) {
+            MAIN_HANDLER.post(new Runnable() {
+                @Override
+                public void run() {
+                    StateListener l = stateListener;
+                    if (l != null) {
+                        try {
+                            l.onStateChanged(state, srv);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            });
+        }
+        try {
+            Intent broadcast = new Intent(ACTION_STATE_CHANGED);
+            broadcast.setPackage(getPackageName());
+            broadcast.putExtra(EXTRA_STATE, state.name());
+            if (srv != null) {
+                broadcast.putExtra(EXTRA_SERVER, srv);
+            }
+            sendBroadcast(broadcast);
+        } catch (Exception ignored) {}
+    }
+
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
@@ -1222,13 +1324,17 @@ public class GoblinVpnService extends VpnService {
                 rvExpanded.setTextColor(R.id.notifBtnAction, Color.parseColor("#FFFFFF"));
                 rvExpanded.setOnClickPendingIntent(R.id.notifBtnAction, piDisconnect);
             } else if (currentState == VpnState.CONNECTING) {
-                String connectingStr = "Подключение • " + serverName;
+                String hint = connectionStageHint;
+                String connectingStr = (hint != null && !hint.isEmpty())
+                        ? ("Подбор • " + hint)
+                        : ("Подключение • " + serverName);
                 rvCollapsed.setTextViewText(R.id.notifStatusText, connectingStr);
                 rvCollapsed.setTextColor(R.id.notifStatusText, Color.parseColor("#FBBF24"));
                 rvExpanded.setTextViewText(R.id.notifStatusText, connectingStr);
                 rvExpanded.setTextColor(R.id.notifStatusText, Color.parseColor("#FBBF24"));
 
-                rvCollapsed.setTextViewText(R.id.notifTrafficText, "Настройка туннеля...");
+                String detail = (hint != null && !hint.isEmpty()) ? "Параллельный пинг (5 узлов)…" : "Настройка туннеля...";
+                rvCollapsed.setTextViewText(R.id.notifTrafficText, detail);
                 rvExpanded.setTextViewText(R.id.notifTrafficRx, "Получено: 0 Б");
                 rvExpanded.setTextViewText(R.id.notifTrafficTx, "Передано: 0 Б");
 

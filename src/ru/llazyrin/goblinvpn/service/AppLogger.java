@@ -19,9 +19,11 @@ import java.util.Locale;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import ru.llazyrin.goblinvpn.model.NetworkPreferences;
 import ru.llazyrin.goblinvpn.model.VpnServer;
@@ -41,24 +43,19 @@ import ru.llazyrin.goblinvpn.net.AppTelemetryClient;
  */
 public class AppLogger {
     private static final String DEFAULT_TAG = "GoblinVPN";
-    private static final int MAX_QUEUE_SIZE = 200;
-    private static final int BATCH_SIZE = 50;
-    private static final int BATCH_TRIGGER_THRESHOLD = 25;
-    private static final int FLUSH_INTERVAL_SECONDS = 30;
+    private static final int MAX_QUEUE_SIZE = 1000;
+    private static final int BATCH_SIZE = 100;
+    private static final int BATCH_TRIGGER_THRESHOLD = 50;
+    private static final int FLUSH_INTERVAL_SECONDS = 120;
 
     private static final ConcurrentLinkedQueue<LogItem> logQueue = new ConcurrentLinkedQueue<>();
+    private static final AtomicInteger queueSize = new AtomicInteger(0);
     private static final Object flushLock = new Object();
+    private static final Object schedulerLock = new Object();
     private static volatile Context appContext = null;
 
-    private static final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new Thread(r, "GoblinLogDispatcher");
-            t.setDaemon(true);
-            return t;
-        }
-    });
-
+    private static ScheduledExecutorService scheduler = null;
+    private static ScheduledFuture<?> scheduledFlushFuture = null;
     private static final AtomicBoolean isSchedulerStarted = new AtomicBoolean(false);
 
     private static final ThreadLocal<SimpleDateFormat> TIME_FORMAT = new ThreadLocal<SimpleDateFormat>() {
@@ -123,21 +120,67 @@ public class AppLogger {
             }
         } catch (Exception ignored) {}
 
-        if (isSchedulerStarted.compareAndSet(false, true)) {
-            scheduler.scheduleWithFixedDelay(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        flushLogsInternal();
-                    } catch (Throwable t) {
-                        Log.w(DEFAULT_TAG, "Periodic log flush error: " + t.getMessage());
-                    }
-                }
-            }, 10, FLUSH_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        if (AppTelemetryClient.isRemoteLoggingEnabled()) {
+            startPeriodicFlushIfNeeded();
+        } else {
+            stopPeriodicFlush();
         }
 
         i(DEFAULT_TAG, "AppLogger initialized. OS: Android " + Build.VERSION.RELEASE +
                 " (API " + Build.VERSION.SDK_INT + "), Device: " + Build.MANUFACTURER + " " + Build.MODEL);
+    }
+
+    private static ScheduledExecutorService getOrCreateSchedulerLocked() {
+        if (scheduler == null || scheduler.isShutdown()) {
+            scheduler = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "GoblinLogDispatcher");
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+        }
+        return scheduler;
+    }
+
+    private static void startPeriodicFlushIfNeeded() {
+        if (!AppTelemetryClient.isRemoteLoggingEnabled()) {
+            return;
+        }
+        synchronized (schedulerLock) {
+            if (!AppTelemetryClient.isRemoteLoggingEnabled()) {
+                return;
+            }
+            if (scheduledFlushFuture == null || scheduledFlushFuture.isCancelled() || scheduledFlushFuture.isDone()) {
+                ScheduledExecutorService exec = getOrCreateSchedulerLocked();
+                scheduledFlushFuture = exec.scheduleWithFixedDelay(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            flushLogsInternal();
+                        } catch (Throwable t) {
+                            Log.w(DEFAULT_TAG, "Periodic log flush error: " + t.getMessage());
+                        }
+                    }
+                }, 10, FLUSH_INTERVAL_SECONDS, TimeUnit.SECONDS);
+                isSchedulerStarted.set(true);
+            }
+        }
+    }
+
+    private static void stopPeriodicFlush() {
+        synchronized (schedulerLock) {
+            if (scheduledFlushFuture != null) {
+                scheduledFlushFuture.cancel(false);
+                scheduledFlushFuture = null;
+            }
+            if (scheduler != null) {
+                scheduler.shutdown();
+                scheduler = null;
+            }
+            isSchedulerStarted.set(false);
+        }
     }
 
     public static void i(String tag, String message) {
@@ -189,16 +232,22 @@ public class AppLogger {
         String effectiveTrace = stacktrace != null ? stacktrace : "";
 
         LogItem item = new LogItem(timestamp, level, effectiveTag, effectiveMsg, effectiveTrace);
-        logQueue.offer(item);
+        if (logQueue.offer(item)) {
+            int currentSize = queueSize.incrementAndGet();
 
-        // При превышении лимита 200 записей вытесняем самые старые записи из очереди
-        while (logQueue.size() > MAX_QUEUE_SIZE) {
-            logQueue.poll();
-        }
+            // При превышении лимита записей вытесняем самые старые записи из очереди
+            while (currentSize > MAX_QUEUE_SIZE) {
+                if (logQueue.poll() != null) {
+                    currentSize = queueSize.decrementAndGet();
+                } else {
+                    break;
+                }
+            }
 
-        // Если накопилось 25+ записей и логирование включено сервером — запускаем досрочную отправку
-        if (logQueue.size() >= BATCH_TRIGGER_THRESHOLD && AppTelemetryClient.isRemoteLoggingEnabled()) {
-            triggerFlushAsync();
+            // Если накопилось BATCH_TRIGGER_THRESHOLD+ записей и логирование включено сервером — запускаем досрочную отправку
+            if (currentSize >= BATCH_TRIGGER_THRESHOLD && AppTelemetryClient.isRemoteLoggingEnabled()) {
+                triggerFlushAsync();
+            }
         }
     }
 
@@ -206,24 +255,34 @@ public class AppLogger {
         if (!AppTelemetryClient.isRemoteLoggingEnabled()) {
             return;
         }
-        scheduler.execute(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    flushLogsInternal();
-                } catch (Throwable t) {
-                    Log.w(DEFAULT_TAG, "Async log flush error: " + t.getMessage());
-                }
+        synchronized (schedulerLock) {
+            if (!AppTelemetryClient.isRemoteLoggingEnabled()) {
+                return;
             }
-        });
+            getOrCreateSchedulerLocked().execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        flushLogsInternal();
+                    } catch (Throwable t) {
+                        Log.w(DEFAULT_TAG, "Async log flush error: " + t.getMessage());
+                    }
+                }
+            });
+        }
     }
 
     /**
      * Вызывается клиентом телеметрии при смене серверного статуса logging_enabled.
      */
     public static void onRemoteLoggingStateChanged(boolean enabled) {
-        if (enabled && !logQueue.isEmpty()) {
-            triggerFlushAsync();
+        if (enabled) {
+            startPeriodicFlushIfNeeded();
+            if (!logQueue.isEmpty()) {
+                triggerFlushAsync();
+            }
+        } else {
+            stopPeriodicFlush();
         }
     }
 
@@ -255,9 +314,11 @@ public class AppLogger {
                 if (success) {
                     for (LogItem sentItem : batch) {
                         if (logQueue.peek() == sentItem) {
-                            logQueue.poll();
-                        } else {
-                            logQueue.remove(sentItem);
+                            if (logQueue.poll() != null) {
+                                queueSize.decrementAndGet();
+                            }
+                        } else if (logQueue.remove(sentItem)) {
+                            queueSize.decrementAndGet();
                         }
                     }
                     if (batch.size() < BATCH_SIZE) {
@@ -265,7 +326,7 @@ public class AppLogger {
                     }
                 } else {
                     // Ошибка сети — оставляем записи в очереди для следующей попытки
-                    Log.d(DEFAULT_TAG, "sendBatchLogs network error, retained " + logQueue.size() + " items in queue");
+                    Log.d(DEFAULT_TAG, "sendBatchLogs network error, retained " + queueSize.get() + " items in queue");
                     break;
                 }
             }
@@ -281,7 +342,9 @@ public class AppLogger {
     }
 
     public static void clearLogs() {
-        logQueue.clear();
+        while (logQueue.poll() != null) {
+            queueSize.decrementAndGet();
+        }
         i(DEFAULT_TAG, "Журнал логов очищен");
     }
 

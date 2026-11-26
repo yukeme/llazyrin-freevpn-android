@@ -14,6 +14,7 @@ import android.net.TrafficStats;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.Process;
 import android.os.SystemClock;
 import android.telephony.TelephonyManager;
@@ -67,9 +68,9 @@ import ru.llazyrin.goblinvpn.service.VpnState;
 public class AutoSwitchEngine {
     private static final String TAG = "AutoSwitchEngine";
 
-    public static final long BENCHMARK_INTERVAL_SECONDS = 120L; // 2 minutes
-    private static final long HEALTH_CHECK_INTERVAL_SECONDS = 6L; // Check every 6 seconds
-    private static final long KEEP_ALIVE_INTERVAL_SECONDS = 20L; // 20s NAT keepalive
+    public static final long BENCHMARK_INTERVAL_SECONDS = 300L; // 5 minutes
+    private static final long HEALTH_CHECK_INTERVAL_SECONDS = 15L; // Check every 15 seconds
+    private static final long KEEP_ALIVE_INTERVAL_SECONDS = 45L; // 45s cellular NAT keepalive
     private static final long BASE_SWITCH_COOLDOWN_MS = 30000L; // 30s base cooldown after switch
     private static final long MAX_SWITCH_COOLDOWN_MS = 300000L; // 5 min max backoff cap
     private static final long HEALTHY_STABILITY_WINDOW_MS = 120000L; // 2 min stable resets backoff
@@ -79,8 +80,9 @@ public class AutoSwitchEngine {
     private static final long STANDBY_FRESHNESS_TTL_MS = 180_000L; // 3 minutes max cache validity
     private static final int BATCH_TEST_SIZE = 5;
     public static final int CELLULAR_WAVE_BATCH_SIZE = 5;
-    public static final int CELLULAR_WAVE_TIMEOUT_MS = 3800;
+    public static final int CELLULAR_WAVE_TIMEOUT_MS = 2200;
     public static final int CELLULAR_PRIMARY_WAVE_LIMIT = 20; // 4 waves of 5 servers = 20 candidates
+    private static final long COMMUNITY_REPORT_COOLDOWN_MS = 1_800_000L; // 30 minutes per server
 
     public enum NetworkProfile {
         WIFI("Wi-Fi", 250, 300),
@@ -173,6 +175,8 @@ public class AutoSwitchEngine {
 
     private long lastTrafficRxBytes = 0;
     private long lastTrafficTimestampMs = 0;
+    private volatile long lastKeepAliveRxBytes = 0L;
+    private final Map<String, Long> lastCommunityReportMs = new ConcurrentHashMap<>();
 
     private int mobilePoolCursor = 0;
     private volatile boolean lastWasCellular = false;
@@ -374,13 +378,23 @@ public class AutoSwitchEngine {
         initialFailoverAttempts.set(0);
         sessionHandshakeFailedKeys.clear();
         recentSwitchedServerKeys.clear();
-        failedServerCooldowns.clear();
-        serverFailureCounts.clear();
         verifiedCellularQueue.clear();
+        long now = SystemClock.elapsedRealtime();
+        java.util.Iterator<Map.Entry<String, Long>> it = failedServerCooldowns.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, Long> entry = it.next();
+            long rem = entry.getValue() - now;
+            if (rem <= 0L) {
+                it.remove();
+                serverFailureCounts.remove(entry.getKey());
+            } else {
+                entry.setValue(now + Math.max(15_000L, rem / 2L));
+            }
+        }
         try {
-            ServerPenaltyManager.getInstance(appContext).resetAll();
+            ServerPenaltyManager.getInstance(appContext).pruneExpiredAndDecay();
         } catch (Throwable ignored) {}
-        AppLogger.i(TAG, "⚡ User initiated connect: reset failover counters, queue, and penalties.");
+        AppLogger.i(TAG, "⚡ User initiated connect: reset failover counters/queue and pruned expired penalties.");
     }
 
     /**
@@ -559,11 +573,52 @@ public class AutoSwitchEngine {
             return null;
         }
 
-        int totalPrimary = Math.min(candidates.size(), CELLULAR_PRIMARY_WAVE_LIMIT);
+        // Fast parallel TCP preflight (650ms) over top 12 non-blacklisted candidates before Wave 1
+        List<VpnServer> preflightSlice = new ArrayList<>();
+        Set<String> preflightKeys = new HashSet<>();
+        for (VpnServer c : candidates) {
+            if (c == null) continue;
+            if (!isServerInCooldown(c.getServerKey()) && !ServerPenaltyManager.getInstance(appContext).isPenalized(c.getServerKey())) {
+                preflightSlice.add(c);
+                preflightKeys.add(c.getServerKey().toLowerCase(Locale.ROOT));
+                if (preflightSlice.size() >= 12) break;
+            }
+        }
+        if (preflightSlice.isEmpty()) {
+            for (int i = 0; i < Math.min(candidates.size(), 12); i++) {
+                VpnServer c = candidates.get(i);
+                if (c != null) {
+                    preflightSlice.add(c);
+                    preflightKeys.add(c.getServerKey().toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+
+        List<VpnServer> tcpAlive = ServerPinger.preflightTcpBatch(preflightSlice, 650);
+        if ((cancelFlag != null && cancelFlag.get()) || GoblinVpnService.isExplicitUserDisconnect) {
+            return null;
+        }
+        AppLogger.i(TAG, "⚡ [TCP Preflight] " + tcpAlive.size() + "/" + preflightSlice.size() + " top candidates reachable in <=650ms");
+
+        List<VpnServer> effectiveCandidates = new ArrayList<>();
+        effectiveCandidates.addAll(tcpAlive);
+        for (VpnServer c : candidates) {
+            if (c != null && !preflightKeys.contains(c.getServerKey().toLowerCase(Locale.ROOT))) {
+                effectiveCandidates.add(c);
+            }
+        }
+        boolean usedTcpPreflight = !tcpAlive.isEmpty();
+        if (effectiveCandidates.isEmpty()) {
+            // Preflight filtered everything; preserve original fallback candidate list
+            effectiveCandidates = candidates;
+            usedTcpPreflight = false;
+        }
+
+        int totalPrimary = Math.min(effectiveCandidates.size(), CELLULAR_PRIMARY_WAVE_LIMIT);
         int totalWaves = Math.max(1, (totalPrimary + CELLULAR_WAVE_BATCH_SIZE - 1) / CELLULAR_WAVE_BATCH_SIZE);
 
         // Run up to totalPrimary in batches of 5 (then overflow if all primary failed)
-        int maxScan = candidates.size();
+        int maxScan = effectiveCandidates.size();
         for (int offset = 0; offset < maxScan; offset += CELLULAR_WAVE_BATCH_SIZE) {
             if ((cancelFlag != null && cancelFlag.get()) || GoblinVpnService.isExplicitUserDisconnect) {
                 AppLogger.i(TAG, "⚡ Wave selection aborted (user disconnected or superseded).");
@@ -571,7 +626,7 @@ public class AutoSwitchEngine {
             }
 
             int end = Math.min(offset + CELLULAR_WAVE_BATCH_SIZE, maxScan);
-            List<VpnServer> wave = new ArrayList<>(candidates.subList(offset, end));
+            List<VpnServer> wave = new ArrayList<>(effectiveCandidates.subList(offset, end));
             int waveIdx = (offset / CELLULAR_WAVE_BATCH_SIZE) + 1;
             int displayTotal = (offset < totalPrimary) ? totalWaves : Math.max(waveIdx, (maxScan + CELLULAR_WAVE_BATCH_SIZE - 1) / CELLULAR_WAVE_BATCH_SIZE);
 
@@ -590,7 +645,7 @@ public class AutoSwitchEngine {
             AppLogger.i(TAG, "📡 [Wave " + waveIdx + "/" + displayTotal + "] Pinging batch of " + wave.size()
                     + " cellular nodes via Telegram API: [" + targetsDesc.toString() + "]");
 
-            List<VpnServer> waveAlive = ServerPinger.benchmarkBatchSync(wave, CELLULAR_WAVE_TIMEOUT_MS);
+            List<VpnServer> waveAlive = ServerPinger.benchmarkBatchSync(wave, CELLULAR_WAVE_TIMEOUT_MS, usedTcpPreflight);
 
             if ((cancelFlag != null && cancelFlag.get()) || GoblinVpnService.isExplicitUserDisconnect) {
                 return null;
@@ -889,6 +944,7 @@ public class AutoSwitchEngine {
                 if (now - lastNetworkHandoverMs < 800L) return;
                 lastNetworkHandoverMs = now;
                 lastWasCellular = false;
+                WhitelistPoolManager.setLastKnownCellular(false);
                 GoblinVpnService.updateUnderlyingNetwork(null);
                 AppLogger.i(TAG, "⚡ DEFAULT ROUTE HANDOVER: Cellular -> Wi-Fi (" + network + ")! Restoring VPN connection over Wi-Fi...");
                 onNetworkSwitchedToWifi();
@@ -896,6 +952,7 @@ public class AutoSwitchEngine {
                 if (now - lastNetworkHandoverMs < 800L) return;
                 lastNetworkHandoverMs = now;
                 lastWasCellular = true;
+                WhitelistPoolManager.setLastKnownCellular(true);
                 GoblinVpnService.updateUnderlyingNetwork(null);
                 AppLogger.i(TAG, "⚡ DEFAULT ROUTE HANDOVER: Wi-Fi -> Cellular (" + network + ")! Activating mobile bypass...");
                 onNetworkSwitchedToCellular();
@@ -1199,6 +1256,7 @@ public class AutoSwitchEngine {
         this.consecutiveDropCount = 0;
         this.lastTrafficRxBytes = TrafficStats.getUidRxBytes(Process.myUid());
         this.lastTrafficTimestampMs = SystemClock.elapsedRealtime();
+        this.lastKeepAliveRxBytes = this.lastTrafficRxBytes;
         this.initialFailoverAttempts.set(0);
 
         if (server != null) {
@@ -1369,12 +1427,29 @@ public class AutoSwitchEngine {
             @Override
             public void run() {
                 try {
-                    if (GoblinVpnService.getCurrentState() == VpnState.CONNECTED) {
-                        GoblinVpnService.measureActiveTunnelDelay(ServerPinger.HTTP_204_CLOUDFLARE);
+                    if (GoblinVpnService.getCurrentState() != VpnState.CONNECTED) {
+                        return;
                     }
+                    boolean isCellular = (defaultNetworkCallback != null)
+                            ? lastWasCellular
+                            : WhitelistPoolManager.isRunningOnCellular(appContext);
+                    if (!isCellular) {
+                        return;
+                    }
+                    long curRx = TrafficStats.getUidRxBytes(Process.myUid());
+                    if (curRx == TrafficStats.UNSUPPORTED) {
+                        curRx = TrafficStats.getTotalRxBytes();
+                    }
+                    long deltaBytes = (lastKeepAliveRxBytes > 0 && curRx >= lastKeepAliveRxBytes)
+                            ? (curRx - lastKeepAliveRxBytes) : 0L;
+                    lastKeepAliveRxBytes = curRx;
+                    if (deltaBytes > 1024L) {
+                        return; // Recent traffic already kept cellular NAT alive
+                    }
+                    GoblinVpnService.measureActiveTunnelDelay(ServerPinger.HTTP_204_GSTATIC);
                 } catch (Exception ignored) {}
             }
-        }, 15, KEEP_ALIVE_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        }, KEEP_ALIVE_INTERVAL_SECONDS, KEEP_ALIVE_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 
     private synchronized void cancelKeepAliveSchedule() {
@@ -1540,6 +1615,22 @@ public class AutoSwitchEngine {
         });
     }
 
+    private boolean isScreenOn() {
+        try {
+            PowerManager pm = (PowerManager) appContext.getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+                    return pm.isInteractive();
+                } else {
+                    @SuppressWarnings("deprecation")
+                    boolean on = pm.isScreenOn();
+                    return on;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return true;
+    }
+
     /**
      * Фоновый бенчмарк: тестирует доступные узлы и обновляет горячий резерв (Hot Standby).
      */
@@ -1547,6 +1638,13 @@ public class AutoSwitchEngine {
         NetworkPreferences prefs = NetworkPreferences.getInstance(appContext);
         if (!prefs.isAutoSwitchServerEnabled()) {
             return; // Zero background benchmarking when Auto-Switch is OFF
+        }
+        if (!isScreenOn()) {
+            return; // Save battery: skip background 5-server benchmarks while screen is OFF
+        }
+        long nowBenchCheckMs = SystemClock.elapsedRealtime();
+        if (standbyPool.size() >= STANDBY_POOL_SIZE && (nowBenchCheckMs - standbyPoolTimestampMs) < STANDBY_FRESHNESS_TTL_MS) {
+            return; // Standby pool is already full and fresh
         }
 
         if (!isBenchmarking.compareAndSet(false, true)) {
@@ -1687,28 +1785,33 @@ public class AutoSwitchEngine {
             return;
         }
 
-        // ПЕРВЫМ ДЕЛОМ: Проверка физического переключения сети Wi-Fi <-> Сотовая сеть
-        boolean isCellular = WhitelistPoolManager.isRunningOnCellular(appContext);
+        // ПЕРВЫМ ДЕЛОМ: Проверка физического переключения сети Wi-Fi <-> Сотовая сеть (только fallback, если NetworkCallback недоступен)
         long now = SystemClock.elapsedRealtime();
-        if (isCellular && !lastWasCellular) {
-            if (now - lastNetworkHandoverMs >= 800L) {
-                lastNetworkHandoverMs = now;
-                lastWasCellular = true;
-                consecutiveSwitchCount = 0; // Сброс бэкоффа при смене типа физической сети
-                currentSwitchCooldownMs = BASE_SWITCH_COOLDOWN_MS;
-                AppLogger.i(TAG, "⚡ Polling detected Wi-Fi -> Cellular transition.");
-                onNetworkSwitchedToCellular();
-                return;
-            }
-        } else if (!isCellular && lastWasCellular) {
-            if (now - lastNetworkHandoverMs >= 800L) {
-                lastNetworkHandoverMs = now;
-                lastWasCellular = false;
-                consecutiveSwitchCount = 0; // Сброс бэкоффа при смене типа физической сети
-                currentSwitchCooldownMs = BASE_SWITCH_COOLDOWN_MS;
-                AppLogger.i(TAG, "⚡ Polling detected Cellular -> Wi-Fi transition.");
-                onNetworkSwitchedToWifi();
-                return;
+        boolean isCellular;
+        if (defaultNetworkCallback != null) {
+            isCellular = lastWasCellular;
+        } else {
+            isCellular = WhitelistPoolManager.isRunningOnCellular(appContext);
+            if (isCellular && !lastWasCellular) {
+                if (now - lastNetworkHandoverMs >= 800L) {
+                    lastNetworkHandoverMs = now;
+                    lastWasCellular = true;
+                    consecutiveSwitchCount = 0; // Сброс бэкоффа при смене типа физической сети
+                    currentSwitchCooldownMs = BASE_SWITCH_COOLDOWN_MS;
+                    AppLogger.i(TAG, "⚡ Polling detected Wi-Fi -> Cellular transition.");
+                    onNetworkSwitchedToCellular();
+                    return;
+                }
+            } else if (!isCellular && lastWasCellular) {
+                if (now - lastNetworkHandoverMs >= 800L) {
+                    lastNetworkHandoverMs = now;
+                    lastWasCellular = false;
+                    consecutiveSwitchCount = 0; // Сброс бэкоффа при смене типа физической сети
+                    currentSwitchCooldownMs = BASE_SWITCH_COOLDOWN_MS;
+                    AppLogger.i(TAG, "⚡ Polling detected Cellular -> Wi-Fi transition.");
+                    onNetworkSwitchedToWifi();
+                    return;
+                }
             }
         }
 
@@ -1739,6 +1842,20 @@ public class AutoSwitchEngine {
         // DATA-FLOW IMMUNITY: Если пользовательские приложения активно принимают данные (> 8 КБ за интервал),
         // туннель физически функционирует и передает пакеты. Срабатывание ложного обрыва категорически блокируется!
         boolean hasDataFlowImmunity = (deltaBytes > DATA_FLOW_IMMUNITY_BYTES);
+
+        // Skip synthetic HTTPS probe when screen is OFF OR real traffic is actively flowing smoothly
+        if (!isScreenOn() || hasDataFlowImmunity) {
+            if (hasDataFlowImmunity) {
+                consecutiveDropCount = 0;
+                consecutiveDegradationCount = 0;
+                if (now - lastSwitchTimestampMs >= HEALTHY_STABILITY_WINDOW_MS && consecutiveSwitchCount > 0) {
+                    AppLogger.d(TAG, "Tunnel stable for " + (HEALTHY_STABILITY_WINDOW_MS / 1000) + "s, resetting switch backoff.");
+                    consecutiveSwitchCount = 0;
+                    currentSwitchCooldownMs = BASE_SWITCH_COOLDOWN_MS;
+                }
+            }
+            return;
+        }
 
         NetworkProfile profile = detectNetworkProfile(appContext);
 
@@ -1945,6 +2062,16 @@ public class AutoSwitchEngine {
 
     private void reportCommunityStats(VpnServer server, int pingMs, long speedKbps) {
         if (server == null) return;
+        String key = server.getServerKey();
+        if (key == null || key.trim().isEmpty()) return;
+        String normKey = key.trim().toLowerCase(Locale.ROOT);
+        long now = SystemClock.elapsedRealtime();
+        Long lastSent = lastCommunityReportMs.get(normKey);
+        if (lastSent != null && (now - lastSent) < COMMUNITY_REPORT_COOLDOWN_MS) {
+            return;
+        }
+        lastCommunityReportMs.put(normKey, now);
+
         try {
             AppTelemetryClient.reportCommunityServerShare(appContext, server, pingMs, speedKbps);
         } catch (Exception ignored) {}

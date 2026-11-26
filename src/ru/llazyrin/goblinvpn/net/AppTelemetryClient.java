@@ -4,6 +4,7 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -22,6 +23,9 @@ import java.net.Socket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -59,6 +63,8 @@ public class AppTelemetryClient {
     private static final String PREF_NAME = "goblin_vpn_telemetry";
     private static final String PREF_REMOTE_LOGGING = "remote_logging_enabled";
     private static final int TIMEOUT_MS = 5000;
+    private static final long COMMUNITY_SHARE_COOLDOWN_MS = 1_800_000L; // 30 minutes per server
+    private static final Map<String, Long> LAST_COMMUNITY_SHARE_MS = new ConcurrentHashMap<>();
 
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
@@ -440,15 +446,30 @@ public class AppTelemetryClient {
             return;
         }
 
+        final int effPing = latencyMs > 0 ? latencyMs : server.getPingMs();
+        if (effPing <= 0) {
+            return;
+        }
+
+        String rawKey = server.getServerKey();
+        if (rawKey == null || rawKey.trim().isEmpty()) {
+            rawKey = (server.getHost() != null ? server.getHost() : "") + ":" + server.getPort();
+        }
+        String normKey = rawKey.trim().toLowerCase(Locale.ROOT);
+        long now = SystemClock.elapsedRealtime();
+        synchronized (LAST_COMMUNITY_SHARE_MS) {
+            Long lastTs = LAST_COMMUNITY_SHARE_MS.get(normKey);
+            if (lastTs != null && (now - lastTs) < COMMUNITY_SHARE_COOLDOWN_MS) {
+                return;
+            }
+            LAST_COMMUNITY_SHARE_MS.put(normKey, now);
+        }
+
         EXECUTOR.execute(new Runnable() {
             @Override
             public void run() {
                 HttpURLConnection conn = null;
                 try {
-                    int effPing = latencyMs > 0 ? latencyMs : server.getPingMs();
-                    if (effPing <= 0) {
-                        return;
-                    }
                     String clientId = getOrCreateClientId(currentContext);
                     JSONObject json = new JSONObject();
                     json.put("client_id", clientId);

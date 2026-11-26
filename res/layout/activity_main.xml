@@ -552,19 +552,21 @@
                 android:layout_marginEnd="16dp"
                 android:layout_marginBottom="8dp"
                 android:background="@drawable/bg_m3_server_card"
+                android:baselineAligned="false"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
                 android:paddingStart="14dp"
-                android:paddingTop="10dp"
+                android:paddingTop="12dp"
                 android:paddingEnd="14dp"
-                android:paddingBottom="10dp">
+                android:paddingBottom="12dp">
 
                 <!-- Flag Box Squircle Tile (38 x 38 dp) -->
                 <FrameLayout
                     android:layout_width="38dp"
                     android:layout_height="38dp"
+                    android:layout_gravity="center_vertical"
                     android:background="@drawable/bg_m3_flag_box">
 
                     <TextView
@@ -572,6 +574,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_gravity="center"
+                        android:includeFontPadding="false"
                         android:text="🇩🇪"
                         android:textSize="18sp" />
                 </FrameLayout>
@@ -580,6 +583,7 @@
                 <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                    android:layout_gravity="center_vertical"
                     android:layout_marginStart="12dp"
                     android:layout_marginEnd="8dp"
                     android:layout_weight="1"
@@ -598,6 +602,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:maxLines="1"
                             android:singleLine="true"
                             android:ellipsize="end"
                             android:includeFontPadding="false"
@@ -614,6 +619,7 @@
                             android:background="@drawable/bg_m3_badge_emerald"
                             android:gravity="center"
                             android:includeFontPadding="false"
+                            android:maxLines="1"
                             android:paddingStart="6dp"
                             android:paddingTop="2dp"
                             android:paddingEnd="6dp"
@@ -627,18 +633,21 @@
 
                     <!-- Row 2: City and Ping in single line -->
                     <LinearLayout
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
+                        android:layout_marginTop="4dp"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
                         <TextView
                             android:id="@+id/tvCardCity"
-                            android:layout_width="wrap_content"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:maxLines="1"
                             android:singleLine="true"
                             android:ellipsize="end"
+                            android:includeFontPadding="false"
                             android:text="Оптимальный"
                             android:textColor="#94A3B8"
                             android:textSize="12sp" />
@@ -646,6 +655,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
+                            android:includeFontPadding="false"
                             android:text=" • "
                             android:textColor="#64748B"
                             android:textSize="10sp" />
@@ -661,6 +671,9 @@
                             android:id="@+id/badgePing"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
+                            android:includeFontPadding="false"
+                            android:maxLines="1"
+                            android:singleLine="true"
                             android:text="301 мс"
                             android:textColor="@color/m3_warning"
                             android:textSize="12sp"
@@ -673,6 +686,7 @@
                 <FrameLayout
                     android:layout_width="32dp"
                     android:layout_height="32dp"
+                    android:layout_gravity="center_vertical"
                     android:background="@drawable/bg_m3_icon_btn">
 
                     <ImageView

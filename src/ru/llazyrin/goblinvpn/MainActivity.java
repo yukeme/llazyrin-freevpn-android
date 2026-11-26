@@ -149,6 +149,7 @@ public class MainActivity extends Activity {
     private LinearLayout cardServerSelector;
     private TextView tvCardFlag;
     private TextView tvCardTitle;
+    private TextView tvCardBadge;
     private TextView tvCardCity;
     private View viewCardPingDot;
     private TextView badgePing;
@@ -241,7 +242,7 @@ public class MainActivity extends Activity {
     private final Runnable statsRunnable = new Runnable() {
         @Override
         public void run() {
-            if (currentState == VpnState.CONNECTED) {
+            if (currentState == VpnState.CONNECTED && !isActivityPaused && isHomeTabActive) {
                 updateTelemetry();
                 statsHandler.postDelayed(this, 1000);
             } else {
@@ -251,14 +252,16 @@ public class MainActivity extends Activity {
     };
 
     // Live Proxy GET Ping Engine State
+    private static final long LIVE_PING_INTERVAL_MS = 12_000L;
+    private static final long SERVER_PING_COOLDOWN_MS = 90_000L;
     private final Handler livePingHandler = new Handler(Looper.getMainLooper());
     private boolean isLivePingRunning = false;
     private final Runnable livePingRunnable = new Runnable() {
         @Override
         public void run() {
-            if (currentState == VpnState.CONNECTED) {
+            if (currentState == VpnState.CONNECTED && !isActivityPaused && isHomeTabActive) {
                 performLivePingCheck();
-                livePingHandler.postDelayed(this, 3500);
+                livePingHandler.postDelayed(this, LIVE_PING_INTERVAL_MS);
             } else {
                 isLivePingRunning = false;
             }
@@ -270,7 +273,12 @@ public class MainActivity extends Activity {
     private VpnServer selectedServer = null; // null means AUTO
     private VpnState currentState = VpnState.DISCONNECTED;
     private boolean isWaveAnimating = false;
+    private boolean isConnectingPulseAnimating = false;
+    private boolean isActivityPaused = false;
+    private boolean isDialogScrimVisible = false;
+    private boolean isHomeTabActive = true;
     private long lastAutoUpdateCheckMs = 0;
+    private long lastServerPingMs = 0L;
 
     private final Handler autoCheckHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoCheckRunnable = new Runnable() {
@@ -278,6 +286,7 @@ public class MainActivity extends Activity {
         public void run() {
             try {
                 if (!isFinishing()) {
+                    lastAutoUpdateCheckMs = System.currentTimeMillis();
                     AppUpdateManager.checkForUpdates(MainActivity.this, false);
                 }
             } catch (Throwable ignored) {}
@@ -519,6 +528,7 @@ public class MainActivity extends Activity {
 
         try {
             // Silent background check for updates & notify system tray if newer version available
+            lastAutoUpdateCheckMs = System.currentTimeMillis();
             AppUpdateManager.checkForUpdates(this, false);
 
             // Check if opened via notification with EXTRA_CHECK_UPDATE or open_inbox
@@ -616,6 +626,7 @@ public class MainActivity extends Activity {
         cardServerSelector = findViewById(R.id.cardServerSelector);
         tvCardFlag = findViewById(R.id.tvCardFlag);
         tvCardTitle = findViewById(R.id.tvCardTitle);
+        tvCardBadge = findViewById(R.id.tvCardBadge);
         tvCardCity = findViewById(R.id.tvCardCity);
         viewCardPingDot = findViewById(R.id.viewCardPingDot);
         badgePing = findViewById(R.id.badgePing);
@@ -1019,6 +1030,7 @@ public class MainActivity extends Activity {
     }
 
     private void switchM3Tab(int tabIndex) {
+        isHomeTabActive = (tabIndex == 0);
         animateNavMorphingCapsule(tabIndex);
 
         if (tabIndex == 0) {
@@ -1069,7 +1081,15 @@ public class MainActivity extends Activity {
             if (tvTabSettings != null) {
                 tvTabSettings.setTextColor(Color.parseColor("#94A3B8"));
             }
+
+            if (currentState == VpnState.CONNECTED && !isActivityPaused) {
+                startTelemetry();
+                startLivePing();
+            }
         } else {
+            stopLivePing();
+            pauseTelemetry();
+
             if (scrollHomeContent != null) {
                 scrollHomeContent.setVisibility(View.GONE);
             }
@@ -1116,6 +1136,8 @@ public class MainActivity extends Activity {
                 });
             }
         }
+
+        syncAnimationAndBackgroundState();
     }
 
     private void animateNavMorphingCapsule(final int tabIndex) {
@@ -1510,15 +1532,18 @@ public class MainActivity extends Activity {
     }
 
     private void showDialogScrim() {
+        isDialogScrimVisible = true;
         if (viewDialogScrim != null) {
             viewDialogScrim.setVisibility(View.VISIBLE);
             viewDialogScrim.animate().alpha(0.85f).setDuration(200).start();
         } else if (viewSettingsBackdrop != null) {
             viewSettingsBackdrop.animate().alpha(0.85f).setDuration(200).start();
         }
+        syncAnimationAndBackgroundState();
     }
 
     private void hideDialogScrim() {
+        isDialogScrimVisible = false;
         if (viewDialogScrim != null) {
             viewDialogScrim.animate().alpha(0f).setDuration(200).withEndAction(new Runnable() {
                 @Override
@@ -1532,6 +1557,7 @@ public class MainActivity extends Activity {
         if (viewSettingsBackdrop != null && currentNavTabIndex == 0) {
             viewSettingsBackdrop.animate().alpha(0f).setDuration(200).start();
         }
+        syncAnimationAndBackgroundState();
     }
 
     private void showPrivacyPolicyDialog() {
@@ -1607,9 +1633,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (starfieldView != null) {
-            starfieldView.setPaused(false);
-        }
+        isActivityPaused = false;
 
         IntentFilter filter = new IntentFilter(GoblinVpnService.ACTION_STATE_CHANGED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1620,6 +1644,7 @@ public class MainActivity extends Activity {
 
         currentState = GoblinVpnService.getCurrentState();
         isWaveAnimating = false;
+        isConnectingPulseAnimating = false;
         AppUpdateManager.checkPendingInstall(this);
         if (AppUpdateManager.isAppBlocked() && AppUpdateManager.getBlockedUpdateInfo() != null) {
             AppUpdateManager.showForceUpdateDialog(this, AppUpdateManager.getBlockedUpdateInfo(), AppUpdateManager.getAppVersionName(this));
@@ -1641,10 +1666,15 @@ public class MainActivity extends Activity {
 
         updateUi();
         if (currentState == VpnState.CONNECTED) {
-            startTelemetry();
-            startLivePing();
-        } else {
-            pingServers();
+            if (isHomeTabActive) {
+                startTelemetry();
+                startLivePing();
+            }
+        } else if (!isRefreshingServers) {
+            long nowPingMs = SystemClock.elapsedRealtime();
+            if (!hasCachedServerPings() || (nowPingMs - lastServerPingMs >= SERVER_PING_COOLDOWN_MS)) {
+                pingServers();
+            }
         }
 
         // Слушатель новых событий Журнала уведомлений
@@ -1664,9 +1694,11 @@ public class MainActivity extends Activity {
         // Синхронизация состояния значка Журнала уведомлений
         boolean hasUnread = NotificationCenter.hasUnreadNotifications(this);
         int expectedColor = hasUnread ? COLOR_NOTIF_GREEN : COLOR_NOTIF_GRAY;
-        if (currentNotificationColor != expectedColor) {
+        if (currentNotificationColor != expectedColor || hasUnread) {
             animateNotificationIconColor(hasUnread);
         }
+
+        syncAnimationAndBackgroundState();
 
         // Уведомляем движок переключения, что приложение развернуто на переднем плане
         try {
@@ -1675,7 +1707,7 @@ public class MainActivity extends Activity {
 
         // Автоматическая проверка обновлений и новостей сервера с дебаунсом 15 минут
         try {
-            long now = SystemClock.elapsedRealtime();
+            long now = System.currentTimeMillis();
             if (now - lastAutoUpdateCheckMs > 900000L) { // 15 минут дебаунс
                 lastAutoUpdateCheckMs = now;
                 AppUpdateManager.checkForUpdates(this, false);
@@ -1698,6 +1730,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        isActivityPaused = true;
         // Уведомляем движок переключения, что приложение ушло в фон (активируем иммунитет Doze)
         try {
             AutoSwitchEngine.getInstance(this).setAppForeground(false);
@@ -1705,13 +1738,10 @@ public class MainActivity extends Activity {
         autoCheckHandler.removeCallbacks(autoCheckRunnable);
         NotificationCenter.removeListener();
         notificationListener = null;
-        if (starfieldView != null) {
-            starfieldView.setPaused(true);
-        }
         stopLivePing();
-        isStatsUpdating = false;
-        statsHandler.removeCallbacks(statsRunnable);
+        pauseTelemetry();
         vipTickerHandler.removeCallbacks(vipTickerRunnable);
+        syncAnimationAndBackgroundState();
         try {
             unregisterReceiver(vpnStateReceiver);
         } catch (Exception ignored) {}
@@ -1719,10 +1749,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (notificationColorAnimator != null) {
-            notificationColorAnimator.cancel();
-            notificationColorAnimator = null;
-        }
+        isActivityPaused = true;
+        cancelAllAnimators();
+        autoCheckHandler.removeCallbacks(autoCheckRunnable);
+        vipTickerHandler.removeCallbacks(vipTickerRunnable);
         NotificationCenter.removeListener();
         notificationListener = null;
         if (activeServerDialog != null && activeServerDialog.isShowing()) {
@@ -1733,6 +1763,94 @@ public class MainActivity extends Activity {
         stopLivePing();
         stopTelemetry();
         super.onDestroy();
+    }
+
+    private boolean shouldRunHomeAnimations() {
+        if (isActivityPaused || isDialogScrimVisible || !isHomeTabActive || isFinishing()) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed()) {
+            return false;
+        }
+        return true;
+    }
+
+    private void syncAnimationAndBackgroundState() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed()) {
+            return;
+        }
+        boolean runHome = shouldRunHomeAnimations();
+
+        if (starfieldView != null) {
+            starfieldView.setPaused(!runHome);
+        }
+
+        if (runHome && !isFinishing()) {
+            if (currentState == VpnState.CONNECTED) {
+                stopConnectingPulse();
+                startGreenWavePulse();
+            } else if (currentState == VpnState.CONNECTING) {
+                stopGreenWavePulse();
+                startConnectingPulse();
+            } else {
+                stopConnectingPulse();
+                stopGreenWavePulse();
+            }
+            if (NotificationCenter.hasUnreadNotifications(this)) {
+                animateNotificationIconColor(true);
+            }
+        } else {
+            stopConnectingPulse();
+            stopGreenWavePulse();
+            pauseNotificationAnimations();
+        }
+    }
+
+    private void pauseNotificationAnimations() {
+        if (bellBreathingAnimator != null) {
+            bellBreathingAnimator.cancel();
+            bellBreathingAnimator = null;
+        }
+        if (badgeNotificationPulse != null) {
+            badgeNotificationPulse.clearAnimation();
+            badgeNotificationPulse.setVisibility(View.GONE);
+        }
+    }
+
+    private void cancelAllAnimators() {
+        if (notificationColorAnimator != null) {
+            notificationColorAnimator.cancel();
+            notificationColorAnimator = null;
+        }
+        pauseNotificationAnimations();
+        if (powerColorAnimator != null) {
+            powerColorAnimator.cancel();
+            powerColorAnimator = null;
+        }
+        if (navMorphingAnimator != null) {
+            navMorphingAnimator.cancel();
+            navMorphingAnimator = null;
+        }
+        if (toggleColorAnimator != null) {
+            toggleColorAnimator.cancel();
+            toggleColorAnimator = null;
+        }
+        if (toggleAutoSwitchColorAnimator != null) {
+            toggleAutoSwitchColorAnimator.cancel();
+            toggleAutoSwitchColorAnimator = null;
+        }
+        if (switchCommunityShareColorAnimator != null) {
+            switchCommunityShareColorAnimator.cancel();
+            switchCommunityShareColorAnimator = null;
+        }
+        stopConnectingPulse();
+        stopGreenWavePulse();
+        if (ivRefreshIcon != null) {
+            ivRefreshIcon.clearAnimation();
+        }
+        if (starfieldView != null) {
+            starfieldView.setPaused(true);
+        }
     }
 
     private void startNotificationPulse() {
@@ -1802,6 +1920,14 @@ public class MainActivity extends Activity {
         }
 
         if (hasUnread) {
+            if (!shouldRunHomeAnimations()) {
+                pauseNotificationAnimations();
+                currentNotificationColor = COLOR_NOTIF_GREEN;
+                if (ivSupportIcon != null) {
+                    ivSupportIcon.setColorFilter(COLOR_NOTIF_GREEN);
+                }
+                return;
+            }
             startNotificationPulse();
             if (bellBreathingAnimator == null || !bellBreathingAnimator.isRunning()) {
                 if (bellBreathingAnimator != null) {
@@ -1911,6 +2037,9 @@ public class MainActivity extends Activity {
                         if (!combined.isEmpty()) {
                             serverList = combined;
                             AutoSwitchEngine.getInstance(MainActivity.this).setCandidateServers(combined);
+                            if (hasCachedServerPings()) {
+                                lastServerPingMs = SystemClock.elapsedRealtime();
+                            }
                         }
 
                         NetworkPreferences prefs = NetworkPreferences.getInstance(MainActivity.this);
@@ -1979,7 +2108,20 @@ public class MainActivity extends Activity {
         });
     }
 
+    private boolean hasCachedServerPings() {
+        if (serverList == null || serverList.isEmpty()) {
+            return false;
+        }
+        for (VpnServer s : serverList) {
+            if (s != null && s.getPingMs() > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void pingServers() {
+        lastServerPingMs = SystemClock.elapsedRealtime();
         if (serverList == null || serverList.isEmpty()) {
             serverList = VpnSubscriptionClient.getBuiltinFallbackServers();
         }
@@ -2604,7 +2746,8 @@ public class MainActivity extends Activity {
         }
         VpnServer target = getTargetServer();
 
-        String cityOrRemark = (target != null && target.getCountry() != null) ? target.getCountry() : "Нидерланды";
+        String fallbackCountry = (target != null && target.getCountry() != null) ? target.getCountry() : "Нидерланды";
+        String cityOrRemark = fallbackCountry;
         if (target != null && target.getRemark() != null && !target.getRemark().trim().isEmpty()) {
             cityOrRemark = target.getRemark();
             if (cityOrRemark.contains("#")) {
@@ -2613,6 +2756,18 @@ public class MainActivity extends Activity {
             if (cityOrRemark.contains("—")) {
                 cityOrRemark = cityOrRemark.substring(0, cityOrRemark.indexOf('—')).trim();
             }
+        }
+        if (cityOrRemark != null) {
+            cityOrRemark = cityOrRemark
+                    .replace("⭐ Проверен на сотовой связи:", "⭐ ")
+                    .replace("⭐ Проверен на сотовой связи", "⭐ ")
+                    .replace("Проверен на сотовой связи:", "")
+                    .replace("Проверен на сотовой связи", "")
+                    .replaceAll("\\s{2,}", " ")
+                    .trim();
+        }
+        if (cityOrRemark == null || cityOrRemark.isEmpty()) {
+            cityOrRemark = fallbackCountry;
         }
         if (tvCardCity != null) {
             tvCardCity.setText(cityOrRemark);
@@ -2628,14 +2783,25 @@ public class MainActivity extends Activity {
             tvCardFlag.setText("⚡");
             String country = (target != null && target.getCountry() != null) ? target.getCountry() : "Быстрый";
             tvCardTitle.setText("Автовыбор (" + country + ")");
+            if (tvCardBadge != null) {
+                tvCardBadge.setText("АВТОВЫБОР");
+                tvCardBadge.setVisibility(View.VISIBLE);
+            }
             updateBottomCardPing(target != null ? target.getPingMs() : 70);
         } else if (target != null) {
             tvCardFlag.setText(target.getFlag());
             tvCardTitle.setText(target.getCountry());
+            if (tvCardBadge != null) {
+                tvCardBadge.setVisibility(View.GONE);
+            }
             updateBottomCardPing(target.getPingMs());
         } else {
             tvCardFlag.setText("⚡");
             tvCardTitle.setText("Автовыбор");
+            if (tvCardBadge != null) {
+                tvCardBadge.setText("АВТОВЫБОР");
+                tvCardBadge.setVisibility(View.VISIBLE);
+            }
             updateBottomCardPing(70);
         }
     }
@@ -2666,6 +2832,9 @@ public class MainActivity extends Activity {
     }
 
     private void startLivePing() {
+        if (currentState != VpnState.CONNECTED || isActivityPaused || !isHomeTabActive) {
+            return;
+        }
         if (!isLivePingRunning) {
             isLivePingRunning = true;
             livePingHandler.removeCallbacks(livePingRunnable);
@@ -2734,8 +2903,9 @@ public class MainActivity extends Activity {
     }
 
     private void startGreenWavePulse() {
-        if (isWaveAnimating) return;
+        if (isWaveAnimating || !shouldRunHomeAnimations()) return;
         isWaveAnimating = true;
+        isConnectingPulseAnimating = false;
 
         ScaleAnimation btnBreath = new ScaleAnimation(
                 1.0f, 1.05f, 1.0f, 1.05f,
@@ -2746,19 +2916,24 @@ public class MainActivity extends Activity {
         btnBreath.setInterpolator(new AccelerateDecelerateInterpolator());
         btnBreath.setRepeatMode(Animation.REVERSE);
         btnBreath.setRepeatCount(Animation.INFINITE);
-        btnPower.startAnimation(btnBreath);
+        if (btnPower != null) {
+            btnPower.startAnimation(btnBreath);
+        }
 
-        ringInner.setVisibility(View.VISIBLE);
-        AnimationSet waveInner = createWaveAnimation(0);
-        ringInner.startAnimation(waveInner);
+        if (ringInner != null) {
+            ringInner.setVisibility(View.VISIBLE);
+            ringInner.startAnimation(createWaveAnimation(0));
+        }
 
-        ringMiddle.setVisibility(View.VISIBLE);
-        AnimationSet waveMiddle = createWaveAnimation(350);
-        ringMiddle.startAnimation(waveMiddle);
+        if (ringMiddle != null) {
+            ringMiddle.setVisibility(View.VISIBLE);
+            ringMiddle.startAnimation(createWaveAnimation(350));
+        }
 
-        ringOuter.setVisibility(View.VISIBLE);
-        AnimationSet waveOuter = createWaveAnimation(700);
-        ringOuter.startAnimation(waveOuter);
+        if (ringOuter != null) {
+            ringOuter.setVisibility(View.VISIBLE);
+            ringOuter.startAnimation(createWaveAnimation(700));
+        }
     }
 
     private AnimationSet createWaveAnimation(long startOffset) {
@@ -2793,21 +2968,29 @@ public class MainActivity extends Activity {
 
     private void stopGreenWavePulse() {
         isWaveAnimating = false;
-        btnPower.clearAnimation();
-        ringInner.clearAnimation();
-        ringMiddle.clearAnimation();
-        ringOuter.clearAnimation();
-
-        btnPower.setScaleX(1.0f);
-        btnPower.setScaleY(1.0f);
-
-        ringInner.setVisibility(View.INVISIBLE);
-        ringMiddle.setVisibility(View.INVISIBLE);
-        ringOuter.setVisibility(View.INVISIBLE);
+        if (btnPower != null && !isConnectingPulseAnimating) {
+            btnPower.clearAnimation();
+            btnPower.setScaleX(1.0f);
+            btnPower.setScaleY(1.0f);
+        }
+        if (ringInner != null) {
+            ringInner.clearAnimation();
+            ringInner.setVisibility(View.INVISIBLE);
+        }
+        if (ringMiddle != null) {
+            ringMiddle.clearAnimation();
+            ringMiddle.setVisibility(View.INVISIBLE);
+        }
+        if (ringOuter != null) {
+            ringOuter.clearAnimation();
+            ringOuter.setVisibility(View.INVISIBLE);
+        }
     }
 
     private void startConnectingPulse() {
+        if (isConnectingPulseAnimating || !shouldRunHomeAnimations()) return;
         stopGreenWavePulse();
+        isConnectingPulseAnimating = true;
         ScaleAnimation btnBreath = new ScaleAnimation(
                 1.0f, 1.08f, 1.0f, 1.08f,
                 Animation.RELATIVE_TO_SELF, 0.5f,
@@ -2817,13 +3000,18 @@ public class MainActivity extends Activity {
         btnBreath.setRepeatMode(Animation.REVERSE);
         btnBreath.setRepeatCount(Animation.INFINITE);
         btnBreath.setInterpolator(new AccelerateDecelerateInterpolator());
-        btnPower.startAnimation(btnBreath);
+        if (btnPower != null) {
+            btnPower.startAnimation(btnBreath);
+        }
     }
 
     private void stopConnectingPulse() {
-        btnPower.clearAnimation();
-        btnPower.setScaleX(1.0f);
-        btnPower.setScaleY(1.0f);
+        isConnectingPulseAnimating = false;
+        if (btnPower != null && !isWaveAnimating) {
+            btnPower.clearAnimation();
+            btnPower.setScaleX(1.0f);
+            btnPower.setScaleY(1.0f);
+        }
     }
 
     private void animatePowerButtonColor(final int targetColor) {
@@ -2954,9 +3142,15 @@ public class MainActivity extends Activity {
                 }
 
                 stopConnectingPulse();
-                startGreenWavePulse();
-                startTelemetry();
-                startLivePing();
+                if (shouldRunHomeAnimations()) {
+                    startGreenWavePulse();
+                } else {
+                    stopGreenWavePulse();
+                }
+                if (!isActivityPaused && isHomeTabActive) {
+                    startTelemetry();
+                    startLivePing();
+                }
 
                 VpnServer active = GoblinVpnService.getCurrentServer();
                 if (active == null) {
@@ -2985,7 +3179,12 @@ public class MainActivity extends Activity {
                 VpnServer connectingTarget = (svcConnecting != null) ? svcConnecting : ((selectedServer != null) ? selectedServer : getTargetServer());
                 updateSecurityStatusPill(VpnState.CONNECTING, connectingTarget);
 
-                startConnectingPulse();
+                if (shouldRunHomeAnimations()) {
+                    startConnectingPulse();
+                } else {
+                    stopConnectingPulse();
+                    stopGreenWavePulse();
+                }
                 stopTelemetry();
                 stopLivePing();
 
@@ -3078,9 +3277,17 @@ public class MainActivity extends Activity {
         lastRxBytes = curRx;
         lastTxBytes = curTx;
 
+        if (currentState != VpnState.CONNECTED || isActivityPaused || !isHomeTabActive) {
+            return;
+        }
         isStatsUpdating = true;
         statsHandler.removeCallbacks(statsRunnable);
         statsHandler.post(statsRunnable);
+    }
+
+    private void pauseTelemetry() {
+        isStatsUpdating = false;
+        statsHandler.removeCallbacks(statsRunnable);
     }
 
     private void stopTelemetry() {

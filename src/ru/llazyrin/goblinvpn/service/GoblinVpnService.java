@@ -4,8 +4,10 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
 import android.net.Network;
@@ -72,6 +74,8 @@ public class GoblinVpnService extends VpnService {
 
     private static final String CHANNEL_ID = "goblin_vpn_channel";
     private static final int NOTIFICATION_ID = 1001;
+    private static final long NOTIF_TRAFFIC_INTERVAL_MS = 3000L;
+    private static final long WAKELOCK_SAFETY_TIMEOUT_MS = 20_000L;
 
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
@@ -125,12 +129,41 @@ public class GoblinVpnService extends VpnService {
         return lastKnownPing;
     }
 
+    private volatile boolean isScreenOn = true;
+    private volatile boolean lastWasIdleZero = false;
+    private boolean isScreenReceiverRegistered = false;
+
+    private final BroadcastReceiver screenStateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null) return;
+            String action = intent.getAction();
+            if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                isScreenOn = false;
+                MAIN_HANDLER.removeCallbacks(notifTrafficRunnable);
+            } else if (Intent.ACTION_SCREEN_ON.equals(action)) {
+                isScreenOn = true;
+                if (currentState == VpnState.CONNECTED || currentState == VpnState.CONNECTING) {
+                    lastWasIdleZero = false;
+                    updateNotification(null, false);
+                    MAIN_HANDLER.removeCallbacks(notifTrafficRunnable);
+                    MAIN_HANDLER.postDelayed(notifTrafficRunnable, NOTIF_TRAFFIC_INTERVAL_MS);
+                }
+            }
+        }
+    };
+
     private final Runnable notifTrafficRunnable = new Runnable() {
         @Override
         public void run() {
+            if (!isScreenOn) {
+                return;
+            }
             if (currentState == VpnState.CONNECTED || currentState == VpnState.CONNECTING) {
-                updateNotification(null);
-                MAIN_HANDLER.postDelayed(this, 1500);
+                updateNotification(null, currentState == VpnState.CONNECTED);
+                if (isScreenOn && (currentState == VpnState.CONNECTED || currentState == VpnState.CONNECTING)) {
+                    MAIN_HANDLER.postDelayed(this, NOTIF_TRAFFIC_INTERVAL_MS);
+                }
             }
         }
     };
@@ -138,10 +171,6 @@ public class GoblinVpnService extends VpnService {
     public static void updateLivePing(int pingMs) {
         if (pingMs > 0) {
             lastKnownPing = pingMs;
-        }
-        GoblinVpnService instance = activeInstance;
-        if (instance != null && currentState == VpnState.CONNECTED) {
-            instance.updateNotification(null);
         }
     }
 
@@ -173,6 +202,7 @@ public class GoblinVpnService extends VpnService {
     private final AtomicLong activeSessionId = new AtomicLong(0);
     private ParcelFileDescriptor vpnInterface = null;
     private volatile CoreController coreController = null;
+    private volatile boolean coreShutdownSignaled = false;
     private Thread workerThread = null;
     private volatile boolean isRunning = false;
     private final Object tunnelLock = new Object();
@@ -181,14 +211,27 @@ public class GoblinVpnService extends VpnService {
     private WifiManager.WifiLock tunnelWifiLock = null;
     private volatile boolean isRestrictedTelegramOnly = false;
 
+    private final Runnable wakeLockSafetyTimeoutRunnable = new Runnable() {
+        @Override
+        public void run() {
+            AppLogger.d(TAG, "WakeLock/WifiLock 20s safety timeout reached; releasing transition locks");
+            releaseWakeLocks();
+        }
+    };
+
     private synchronized void acquireWakeLocks() {
+        MAIN_HANDLER.removeCallbacks(wakeLockSafetyTimeoutRunnable);
+        MAIN_HANDLER.postDelayed(wakeLockSafetyTimeoutRunnable, WAKELOCK_SAFETY_TIMEOUT_MS);
+
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (pm != null && (tunnelWakeLock == null || !tunnelWakeLock.isHeld())) {
-                tunnelWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "llazyrinVPN:TunnelWakeLock");
-                tunnelWakeLock.setReferenceCounted(false);
-                tunnelWakeLock.acquire();
-                AppLogger.i(TAG, "Acquired PowerManager.WakeLock (llazyrinVPN:TunnelWakeLock)");
+            if (pm != null) {
+                if (tunnelWakeLock == null) {
+                    tunnelWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "llazyrinVPN:TunnelWakeLock");
+                    tunnelWakeLock.setReferenceCounted(false);
+                }
+                tunnelWakeLock.acquire(WAKELOCK_SAFETY_TIMEOUT_MS);
+                AppLogger.i(TAG, "Acquired PowerManager.WakeLock (llazyrinVPN:TunnelWakeLock, timeout=20s)");
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to acquire WakeLock: " + e.getMessage());
@@ -196,11 +239,15 @@ public class GoblinVpnService extends VpnService {
 
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wm != null && (tunnelWifiLock == null || !tunnelWifiLock.isHeld())) {
-                tunnelWifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "llazyrinVPN:WifiLock");
-                tunnelWifiLock.setReferenceCounted(false);
-                tunnelWifiLock.acquire();
-                AppLogger.i(TAG, "Acquired WifiManager.WifiLock (llazyrinVPN:WifiLock)");
+            if (wm != null) {
+                if (tunnelWifiLock == null) {
+                    tunnelWifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "llazyrinVPN:WifiLock");
+                    tunnelWifiLock.setReferenceCounted(false);
+                }
+                if (!tunnelWifiLock.isHeld()) {
+                    tunnelWifiLock.acquire();
+                    AppLogger.i(TAG, "Acquired WifiManager.WifiLock (llazyrinVPN:WifiLock)");
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to acquire WifiLock: " + e.getMessage());
@@ -208,6 +255,8 @@ public class GoblinVpnService extends VpnService {
     }
 
     private synchronized void releaseWakeLocks() {
+        MAIN_HANDLER.removeCallbacks(wakeLockSafetyTimeoutRunnable);
+
         try {
             if (tunnelWakeLock != null && tunnelWakeLock.isHeld()) {
                 tunnelWakeLock.release();
@@ -308,6 +357,33 @@ public class GoblinVpnService extends VpnService {
         AppLogger.init(getApplicationContext());
         AppLogger.i(TAG, "GoblinVpnService created, initializing Xray environment...");
         initXrayEnvironment();
+
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+                    isScreenOn = pm.isInteractive();
+                } else {
+                    isScreenOn = pm.isScreenOn();
+                }
+            }
+        } catch (Exception ignored) {}
+
+        if (!isScreenReceiverRegistered) {
+            try {
+                IntentFilter screenFilter = new IntentFilter();
+                screenFilter.addAction(Intent.ACTION_SCREEN_ON);
+                screenFilter.addAction(Intent.ACTION_SCREEN_OFF);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(screenStateReceiver, screenFilter, Context.RECEIVER_NOT_EXPORTED);
+                } else {
+                    registerReceiver(screenStateReceiver, screenFilter);
+                }
+                isScreenReceiverRegistered = true;
+            } catch (Throwable t) {
+                Log.w(TAG, "Failed to register screen state receiver: " + t.getMessage());
+            }
+        }
     }
 
     private synchronized void initXrayEnvironment() {
@@ -452,6 +528,7 @@ public class GoblinVpnService extends VpnService {
         if (!foregroundStarted) {
             Log.e(TAG, "Could not start foreground service. Aborting connection.");
             connectionStageHint = null;
+            releaseWakeLocks();
             updateState(VpnState.ERROR);
             stopSelf();
             return;
@@ -538,6 +615,7 @@ public class GoblinVpnService extends VpnService {
                         if (activeSessionId.get() != session) {
                             return;
                         }
+                        coreShutdownSignaled = false;
                         coreController = Libv2ray.newCoreController(new CoreCallbackHandler() {
                             @Override
                             public long startup() {
@@ -548,6 +626,10 @@ public class GoblinVpnService extends VpnService {
                             @Override
                             public long shutdown() {
                                 Log.i(TAG, "Xray-core shutdown callback");
+                                synchronized (tunnelLock) {
+                                    coreShutdownSignaled = true;
+                                    tunnelLock.notifyAll();
+                                }
                                 return 0;
                             }
 
@@ -562,13 +644,17 @@ public class GoblinVpnService extends VpnService {
                     }
 
                     // =========================================================================
-                    // FAST INITIAL HANDSHAKE WATCHDOG (Adaptive deadline: 9.0s cellular / 3.5s Wi-Fi)
+                    // FAST INITIAL HANDSHAKE WATCHDOG (Adaptive deadline: 5.5s probed / 9.0s cold cellular / 3.5s Wi-Fi)
                     // Parallelized multi-target in-tunnel verification (Telegram API, GStatic, Cloudflare)
                     // =========================================================================
                     boolean handshakeOk = false;
                     final long watchdogStartMs = SystemClock.elapsedRealtime();
                     final boolean isCellular = WhitelistPoolManager.isRunningOnCellular(GoblinVpnService.this);
-                    final long watchdogDeadlineMs = isCellular ? 9000L : 3500L;
+                    final boolean hasHealthyProbe = activeTarget != null
+                            && activeTarget.isAlive()
+                            && activeTarget.getPingMs() > 0
+                            && activeTarget.getPingMs() < 2000;
+                    final long watchdogDeadlineMs = isCellular ? (hasHealthyProbe ? 5500L : 9000L) : 3500L;
 
                     AppLogger.i(TAG, "Starting Initial Handshake Watchdog (" + watchdogDeadlineMs + "ms deadline, cellular="
                             + isCellular + ") on node " + (activeTarget != null ? activeTarget.getDisplayName() + " [" + activeTarget.getHost() + ":" + activeTarget.getPort()
@@ -680,16 +766,28 @@ public class GoblinVpnService extends VpnService {
                         Log.i(TAG, "VPN tunnel actively routing traffic through Xray-core.");
                     }
 
-                    // Monitor loop keeping connection alive
-                    while (isRunning && activeSessionId.get() == session && vpnInterface != null) {
-                        try {
-                            Thread.sleep(1000);
-                            if (coreController != null && !coreController.getIsRunning()) {
-                                Log.w(TAG, "Xray core loop exited unexpectedly");
+                    // Monitor loop keeping connection alive (event-driven wait on tunnelLock)
+                    while (isRunning && activeSessionId.get() == session) {
+                        CoreController controllerSnapshot;
+                        synchronized (tunnelLock) {
+                            if (!isRunning || activeSessionId.get() != session || vpnInterface == null || coreShutdownSignaled) {
                                 break;
                             }
-                        } catch (InterruptedException ie) {
+                            controllerSnapshot = coreController;
+                        }
+                        if (controllerSnapshot != null && !controllerSnapshot.getIsRunning()) {
+                            Log.w(TAG, "Xray core loop exited unexpectedly");
                             break;
+                        }
+                        synchronized (tunnelLock) {
+                            if (!isRunning || activeSessionId.get() != session || vpnInterface == null || coreShutdownSignaled) {
+                                break;
+                            }
+                            try {
+                                tunnelLock.wait(6000L);
+                            } catch (InterruptedException ie) {
+                                break;
+                            }
                         }
                     }
 
@@ -894,6 +992,9 @@ public class GoblinVpnService extends VpnService {
         try {
             if (waveCancelToken != null) waveCancelToken.set(true);
         } catch (Throwable ignored) {}
+        synchronized (tunnelLock) {
+            tunnelLock.notifyAll();
+        }
         if (workerThread != null) {
             try {
                 workerThread.interrupt();
@@ -969,29 +1070,34 @@ public class GoblinVpnService extends VpnService {
      * Safely closes the ParcelFileDescriptor and terminates Xray core loop.
      */
     private void closeVpnInterface() {
+        CoreController controllerToStop;
+        ParcelFileDescriptor pfdToClose;
         synchronized (tunnelLock) {
-            if (coreController != null) {
-                try {
-                    Log.i(TAG, "Stopping Xray core loop...");
-                    coreController.stopLoop();
-                } catch (Exception e) {
-                    Log.w(TAG, "Error stopping core loop: " + e.getMessage());
-                } finally {
-                    coreController = null;
-                }
-            }
+            controllerToStop = coreController;
+            coreController = null;
+            pfdToClose = vpnInterface;
+            vpnInterface = null;
+            coreShutdownSignaled = true;
+            tunnelLock.notifyAll();
+        }
 
-            if (vpnInterface != null) {
-                try {
-                    Log.d(TAG, "Closing ParcelFileDescriptor");
-                    vpnInterface.close();
-                } catch (IOException e) {
-                    Log.w(TAG, "IOException closing vpnInterface: " + e.getMessage(), e);
-                } catch (Exception e) {
-                    Log.e(TAG, "Unexpected error closing vpnInterface: " + e.getMessage(), e);
-                } finally {
-                    vpnInterface = null;
-                }
+        if (controllerToStop != null) {
+            try {
+                Log.i(TAG, "Stopping Xray core loop...");
+                controllerToStop.stopLoop();
+            } catch (Exception e) {
+                Log.w(TAG, "Error stopping core loop: " + e.getMessage());
+            }
+        }
+
+        if (pfdToClose != null) {
+            try {
+                Log.d(TAG, "Closing ParcelFileDescriptor");
+                pfdToClose.close();
+            } catch (IOException e) {
+                Log.w(TAG, "IOException closing vpnInterface: " + e.getMessage(), e);
+            } catch (Exception e) {
+                Log.e(TAG, "Unexpected error closing vpnInterface: " + e.getMessage(), e);
             }
         }
     }
@@ -1026,6 +1132,15 @@ public class GoblinVpnService extends VpnService {
     public void onDestroy() {
         Log.i(TAG, "onDestroy() called");
         MAIN_HANDLER.removeCallbacks(notifTrafficRunnable);
+        MAIN_HANDLER.removeCallbacks(wakeLockSafetyTimeoutRunnable);
+        if (isScreenReceiverRegistered) {
+            try {
+                unregisterReceiver(screenStateReceiver);
+            } catch (Exception ignored) {
+            } finally {
+                isScreenReceiverRegistered = false;
+            }
+        }
         activeSessionId.incrementAndGet();
         stopTunnel();
         releaseWakeLocks();
@@ -1038,6 +1153,7 @@ public class GoblinVpnService extends VpnService {
     private void updateState(final VpnState state) {
         currentState = state;
         if (state == VpnState.CONNECTED) {
+            releaseWakeLocks();
             if (connectedTimestamp == 0) {
                 connectedTimestamp = System.currentTimeMillis();
             }
@@ -1050,8 +1166,11 @@ public class GoblinVpnService extends VpnService {
             lastNotifTimeMs = SystemClock.elapsedRealtime();
             lastSpeedRx = 0;
             lastSpeedTx = 0;
+            lastWasIdleZero = false;
             MAIN_HANDLER.removeCallbacks(notifTrafficRunnable);
-            MAIN_HANDLER.postDelayed(notifTrafficRunnable, 1500);
+            if (isScreenOn) {
+                MAIN_HANDLER.postDelayed(notifTrafficRunnable, NOTIF_TRAFFIC_INTERVAL_MS);
+            }
 
             AppLogger.i(TAG, "VPN CONNECTED! Node: " + (currentServer != null ? currentServer.getDisplayName() : "Auto")
                     + " (" + (currentServer != null ? currentServer.getHost() : "") + ")");
@@ -1062,6 +1181,7 @@ public class GoblinVpnService extends VpnService {
                 Log.w(TAG, "Failed to notify AutoSwitchEngine on connected: " + e.getMessage());
             }
         } else if (state == VpnState.DISCONNECTED) {
+            releaseWakeLocks();
             connectedTimestamp = 0;
             initialUidRxBytes = 0;
             initialUidTxBytes = 0;
@@ -1070,6 +1190,7 @@ public class GoblinVpnService extends VpnService {
             lastNotifTimeMs = 0;
             lastSpeedRx = 0;
             lastSpeedTx = 0;
+            lastWasIdleZero = false;
             MAIN_HANDLER.removeCallbacks(notifTrafficRunnable);
             AppLogger.i(TAG, "VPN DISCONNECTED");
             AppTelemetryClient.sendHeartbeat(this, false, null);
@@ -1079,6 +1200,7 @@ public class GoblinVpnService extends VpnService {
                 Log.w(TAG, "Failed to notify AutoSwitchEngine on disconnected: " + e.getMessage());
             }
         } else if (state == VpnState.ERROR) {
+            releaseWakeLocks();
             connectedTimestamp = 0;
             initialUidRxBytes = 0;
             initialUidTxBytes = 0;
@@ -1087,6 +1209,7 @@ public class GoblinVpnService extends VpnService {
             lastNotifTimeMs = 0;
             lastSpeedRx = 0;
             lastSpeedTx = 0;
+            lastWasIdleZero = false;
             MAIN_HANDLER.removeCallbacks(notifTrafficRunnable);
             AppLogger.e(TAG, "VPN ERROR encountered");
             AppTelemetryClient.sendHeartbeat(this, false, null);
@@ -1101,8 +1224,11 @@ public class GoblinVpnService extends VpnService {
             lastNotifTimeMs = 0;
             lastSpeedRx = 0;
             lastSpeedTx = 0;
+            lastWasIdleZero = false;
             MAIN_HANDLER.removeCallbacks(notifTrafficRunnable);
-            MAIN_HANDLER.post(notifTrafficRunnable);
+            if (isScreenOn) {
+                MAIN_HANDLER.post(notifTrafficRunnable);
+            }
             AppLogger.i(TAG, "VPN CONNECTING to " + (currentServer != null ? currentServer.getDisplayName() : "Auto") + "...");
         }
 
@@ -1196,6 +1322,44 @@ public class GoblinVpnService extends VpnService {
     }
 
     private Notification buildNotification(String text) {
+        return buildNotification(text, true);
+    }
+
+    private long[] refreshTrafficStats() {
+        long curRx = TrafficStats.getUidRxBytes(Process.myUid());
+        long curTx = TrafficStats.getUidTxBytes(Process.myUid());
+        if (curRx == TrafficStats.UNSUPPORTED) curRx = 0;
+        if (curTx == TrafficStats.UNSUPPORTED) curTx = 0;
+
+        if (currentState == VpnState.CONNECTED) {
+            if (initialUidRxBytes <= 0 && curRx > 0) initialUidRxBytes = curRx;
+            if (initialUidTxBytes <= 0 && curTx > 0) initialUidTxBytes = curTx;
+
+            long now = SystemClock.elapsedRealtime();
+            long deltaMs = (lastNotifTimeMs > 0) ? (now - lastNotifTimeMs) : 0;
+            if (deltaMs >= 500 && lastNotifRx > 0 && curRx >= lastNotifRx) {
+                lastSpeedRx = (curRx - lastNotifRx) * 1000 / deltaMs;
+            } else if (lastNotifRx == 0 || deltaMs >= 500) {
+                lastSpeedRx = 0;
+            }
+            if (deltaMs >= 500 && lastNotifTx > 0 && curTx >= lastNotifTx) {
+                lastSpeedTx = (curTx - lastNotifTx) * 1000 / deltaMs;
+            } else if (lastNotifTx == 0 || deltaMs >= 500) {
+                lastSpeedTx = 0;
+            }
+
+            lastNotifRx = curRx;
+            lastNotifTx = curTx;
+            lastNotifTimeMs = now;
+        } else {
+            lastSpeedRx = 0;
+            lastSpeedTx = 0;
+        }
+
+        return new long[]{curRx, curTx};
+    }
+
+    private Notification buildNotification(String text, boolean refreshStats) {
         Intent contentIntent = new Intent(this, MainActivity.class);
         contentIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent piContent = PendingIntent.getActivity(
@@ -1274,34 +1438,15 @@ public class GoblinVpnService extends VpnService {
         }
 
         // Calculate real traffic stats and instant speeds (TrafficStats)
-        long curRx = TrafficStats.getUidRxBytes(Process.myUid());
-        long curTx = TrafficStats.getUidTxBytes(Process.myUid());
-        if (curRx == TrafficStats.UNSUPPORTED) curRx = 0;
-        if (curTx == TrafficStats.UNSUPPORTED) curTx = 0;
-
-        if (currentState == VpnState.CONNECTED) {
-            if (initialUidRxBytes <= 0 && curRx > 0) initialUidRxBytes = curRx;
-            if (initialUidTxBytes <= 0 && curTx > 0) initialUidTxBytes = curTx;
-
-            long now = SystemClock.elapsedRealtime();
-            long deltaMs = (lastNotifTimeMs > 0) ? (now - lastNotifTimeMs) : 0;
-            if (deltaMs >= 500 && lastNotifRx > 0 && curRx >= lastNotifRx) {
-                lastSpeedRx = (curRx - lastNotifRx) * 1000 / deltaMs;
-            } else if (lastNotifRx == 0) {
-                lastSpeedRx = 0;
-            }
-            if (deltaMs >= 500 && lastNotifTx > 0 && curTx >= lastNotifTx) {
-                lastSpeedTx = (curTx - lastNotifTx) * 1000 / deltaMs;
-            } else if (lastNotifTx == 0) {
-                lastSpeedTx = 0;
-            }
-
-            lastNotifRx = curRx;
-            lastNotifTx = curTx;
-            lastNotifTimeMs = now;
+        long curRx;
+        long curTx;
+        if (refreshStats) {
+            long[] rxTx = refreshTrafficStats();
+            curRx = rxTx[0];
+            curTx = rxTx[1];
         } else {
-            lastSpeedRx = 0;
-            lastSpeedTx = 0;
+            curRx = lastNotifRx;
+            curTx = lastNotifTx;
         }
 
         long sessionRx = (currentState == VpnState.CONNECTED && curRx >= initialUidRxBytes && initialUidRxBytes > 0)
@@ -1433,10 +1578,25 @@ public class GoblinVpnService extends VpnService {
     }
 
     private void updateNotification(String text) {
+        updateNotification(text, false);
+    }
+
+    private void updateNotification(String text, boolean skipIfConsecutiveIdleZero) {
         try {
+            refreshTrafficStats();
+            if (currentState == VpnState.CONNECTED) {
+                boolean isIdleZero = (lastSpeedRx == 0 && lastSpeedTx == 0);
+                if (skipIfConsecutiveIdleZero && isIdleZero && lastWasIdleZero) {
+                    return;
+                }
+                lastWasIdleZero = isIdleZero;
+            } else {
+                lastWasIdleZero = false;
+            }
+
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) {
-                manager.notify(NOTIFICATION_ID, buildNotification(text));
+                manager.notify(NOTIFICATION_ID, buildNotification(text, false));
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to update notification: " + e.getMessage(), e);

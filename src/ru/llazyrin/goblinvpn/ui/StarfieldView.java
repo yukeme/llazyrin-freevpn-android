@@ -5,6 +5,8 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RadialGradient;
 import android.graphics.Shader;
+import android.os.Build;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.View;
@@ -37,6 +39,9 @@ public class StarfieldView extends View {
 
     // Shooting star rendering segments (tapered trail, zero allocations)
     private static final int METEOR_SEGMENTS = 10;
+
+    // Cap render loop at ~30 FPS for battery efficiency
+    private static final long FRAME_INTERVAL_MS = 33L;
 
     // Flat primitive star arrays (zero GC pressure during animation)
     private final float[] starX = new float[STAR_COUNT];
@@ -78,9 +83,11 @@ public class StarfieldView extends View {
     private float bottomGlowRadius;
 
     // Animation & mode state
+    private PowerManager powerManager;
     private boolean activeMode = false;
     private boolean paused = false;
     private boolean attached = false;
+    private boolean windowFocused = true;
     private float activeBlend = 0f; // smoothly interpolates 0f (idle) <-> 1f (connected)
     private float elapsedSec = 0f;
     private long lastFrameTimeMs = 0L;
@@ -117,6 +124,7 @@ public class StarfieldView extends View {
     }
 
     private void init(Context context) {
+        powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         density = context.getResources().getDisplayMetrics().density;
         if (density <= 0f) {
             density = 1f;
@@ -151,7 +159,7 @@ public class StarfieldView extends View {
         if (this.activeMode != active) {
             this.activeMode = active;
             if (shouldAnimate()) {
-                postInvalidateOnAnimation();
+                postInvalidateDelayed(FRAME_INTERVAL_MS);
             } else {
                 invalidate();
             }
@@ -170,7 +178,7 @@ public class StarfieldView extends View {
             this.paused = paused;
             if (!paused && shouldAnimate()) {
                 lastFrameTimeMs = SystemClock.uptimeMillis();
-                postInvalidateOnAnimation();
+                postInvalidateDelayed(FRAME_INTERVAL_MS);
             }
         }
     }
@@ -179,8 +187,23 @@ public class StarfieldView extends View {
         return paused;
     }
 
+    private boolean isPowerSaveActive() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && powerManager != null) {
+            try {
+                return powerManager.isPowerSaveMode();
+            } catch (Throwable ignored) {}
+        }
+        return false;
+    }
+
     private boolean shouldAnimate() {
-        return !paused && attached && !isInEditMode() && getVisibility() == VISIBLE && getWindowVisibility() == VISIBLE;
+        return !paused
+                && attached
+                && windowFocused
+                && !isInEditMode()
+                && isShown()
+                && getWindowVisibility() == VISIBLE
+                && !isPowerSaveActive();
     }
 
     @Override
@@ -189,7 +212,7 @@ public class StarfieldView extends View {
         attached = true;
         lastFrameTimeMs = SystemClock.uptimeMillis();
         if (shouldAnimate()) {
-            postInvalidateOnAnimation();
+            postInvalidateDelayed(FRAME_INTERVAL_MS);
         }
     }
 
@@ -204,7 +227,7 @@ public class StarfieldView extends View {
         super.onVisibilityChanged(changedView, visibility);
         if (visibility == VISIBLE && shouldAnimate()) {
             lastFrameTimeMs = SystemClock.uptimeMillis();
-            postInvalidateOnAnimation();
+            postInvalidateDelayed(FRAME_INTERVAL_MS);
         }
     }
 
@@ -213,7 +236,17 @@ public class StarfieldView extends View {
         super.onWindowVisibilityChanged(visibility);
         if (visibility == VISIBLE && shouldAnimate()) {
             lastFrameTimeMs = SystemClock.uptimeMillis();
-            postInvalidateOnAnimation();
+            postInvalidateDelayed(FRAME_INTERVAL_MS);
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        this.windowFocused = hasWindowFocus;
+        if (hasWindowFocus && shouldAnimate()) {
+            lastFrameTimeMs = SystemClock.uptimeMillis();
+            postInvalidateDelayed(FRAME_INTERVAL_MS);
         }
     }
 
@@ -489,9 +522,9 @@ public class StarfieldView extends View {
             drawMeteor(canvas);
         }
 
-        // Schedule next 60fps frame only when active and visible
+        // Schedule next ~30fps frame only when active and visible
         if (shouldAnimate()) {
-            postInvalidateOnAnimation();
+            postInvalidateDelayed(FRAME_INTERVAL_MS);
         }
     }
 

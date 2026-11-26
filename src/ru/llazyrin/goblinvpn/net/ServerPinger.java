@@ -19,9 +19,8 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -70,21 +69,25 @@ public class ServerPinger {
     public static final String HTTP_204_GSTATIC = "http://connectivitycheck.gstatic.com/generate_204";
 
     private static final int WORKER_THREADS = 12;
-    private static final ExecutorService pool = Executors.newFixedThreadPool(WORKER_THREADS, new ThreadFactory() {
-        private int count = 0;
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new Thread(r, "GoblinPingerThread-" + (++count));
-            t.setDaemon(true);
-            return t;
-        }
-    });
+    private static final ThreadPoolExecutor pool = new ThreadPoolExecutor(
+            WORKER_THREADS, WORKER_THREADS, 30L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<Runnable>(),
+            new ThreadFactory() {
+                private final AtomicInteger count = new AtomicInteger(0);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "GoblinPingerThread-" + count.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+            }
+    );
 
-    // Shared bounded pool for concurrent Telegram / GStatic sub-probes inside measureRealProxyDelay
-    // Prevents per-server FixedThreadPool leaks while bounding concurrent Libv2ray checks
-    private static final ExecutorService probeSubPool = new ThreadPoolExecutor(
-            4, 16, 30L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<Runnable>(64),
+    // Shared pool for Libv2ray sub-probes inside measureRealProxyDelay.
+    // SynchronousQueue avoids queue starvation behind timed-out native Go probes.
+    private static final ThreadPoolExecutor probeSubPool = new ThreadPoolExecutor(
+            10, 32, 25L, TimeUnit.SECONDS,
+            new SynchronousQueue<Runnable>(),
             new ThreadFactory() {
                 private final AtomicInteger count = new AtomicInteger(0);
                 @Override
@@ -96,6 +99,11 @@ public class ServerPinger {
             },
             new ThreadPoolExecutor.CallerRunsPolicy()
     );
+
+    static {
+        pool.allowCoreThreadTimeOut(true);
+        probeSubPool.allowCoreThreadTimeOut(true);
+    }
 
     private static volatile SSLSocketFactory trustAllSocketFactory = null;
 
@@ -543,81 +551,52 @@ public class ServerPinger {
 
     /**
      * Measures real HTTP proxy latency through native Xray core Libv2ray without TUN.
-     * Enforces an overall deadline across preflight TCP socket check and concurrent
-     * Telegram API / GStatic 204 probes via shared daemon sub-pool.
-     * Exits immediately if either probe succeeds or if both probes fail fast.
+     * Delegates with TCP preflight enabled for backward compatibility.
      */
     public static int measureRealProxyDelay(final VpnServer server, int timeoutMs) {
+        return measureRealProxyDelay(server, timeoutMs, false);
+    }
+
+    /**
+     * Measures real HTTP proxy latency through native Xray core Libv2ray without TUN.
+     * Runs only the single primary Libv2ray probe first (Telegram on cellular, GStatic on Wi-Fi),
+     * falling back to the secondary endpoint only if the primary returns <= 0 within budget.
+     */
+    public static int measureRealProxyDelay(final VpnServer server, int timeoutMs, boolean skipTcpPreflight) {
         if (server == null) return -1;
         final long overallBudgetMs = (timeoutMs > 0 && timeoutMs <= 8000) ? timeoutMs : 3200L;
         final long startMs = System.nanoTime() / 1_000_000L;
 
         // 0. Instant Socket Preflight: if raw TCP socket is blocked/unreachable, fail fast
-        int preflightCapMs = (int) Math.min(1100L, overallBudgetMs);
-        if (!pingSocketDirectFast(server.getHost(), server.getPort(), preflightCapMs)) {
-            server.setAlive(false);
-            server.setPingMs(-1);
-            return -1;
+        if (!skipTcpPreflight) {
+            int preflightCapMs = (int) Math.min(650L, overallBudgetMs);
+            if (!pingSocketDirectFast(server.getHost(), server.getPort(), preflightCapMs)) {
+                server.setAlive(false);
+                server.setPingMs(-1);
+                return -1;
+            }
         }
 
         long elapsedPreflightMs = (System.nanoTime() / 1_000_000L) - startMs;
         long probeWaitMs = Math.max(500L, overallBudgetMs - elapsedPreflightMs);
 
-        // 1. Concurrent In-tunnel probes via Libv2ray.measureOutboundDelay using shared probeSubPool
+        // 1. Single primary in-tunnel probe via Libv2ray.measureOutboundDelay, secondary only on fallback
         try {
             final String configJson = XrayConfigGenerator.generateBenchmarkConfig(server);
             if (configJson != null && !configJson.trim().isEmpty()) {
-                final AtomicInteger resultPing = new AtomicInteger(-1);
-                final AtomicInteger finishedCount = new AtomicInteger(0);
-                final CountDownLatch latch = new CountDownLatch(1);
+                boolean isCellular = WhitelistPoolManager.isLastKnownCellular();
+                String primaryUrl = isCellular ? TELEGRAM_API_URL : HTTP_204_GSTATIC;
+                String secondaryUrl = isCellular ? HTTP_204_GSTATIC : TELEGRAM_API_URL;
 
-                // Probe A: Telegram API (Primary gold standard for Russian mobile connectivity)
-                probeSubPool.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            long delay = Libv2ray.measureOutboundDelay(configJson, TELEGRAM_API_URL);
-                            if (delay > 0) {
-                                int ping = clampRealisticPing(delay, server.getHost());
-                                if (resultPing.compareAndSet(-1, ping)) {
-                                    latch.countDown();
-                                }
-                            }
-                        } catch (Throwable ignored) {
-                        } finally {
-                            if (finishedCount.incrementAndGet() >= 2) {
-                                latch.countDown();
-                            }
-                        }
+                int res = runSingleLibv2rayProbe(configJson, primaryUrl, server.getHost(), probeWaitMs);
+                if (res <= 0) {
+                    long elapsedNowMs = (System.nanoTime() / 1_000_000L) - startMs;
+                    long remainingMs = overallBudgetMs - elapsedNowMs;
+                    if (remainingMs >= 350L) {
+                        res = runSingleLibv2rayProbe(configJson, secondaryUrl, server.getHost(), remainingMs);
                     }
-                });
+                }
 
-                // Probe B: Google Connectivity Check 204 (Fast unencrypted HTTP inside encrypted VLESS tunnel)
-                probeSubPool.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            long delay = Libv2ray.measureOutboundDelay(configJson, HTTP_204_GSTATIC);
-                            if (delay > 0) {
-                                int ping = clampRealisticPing(delay, server.getHost());
-                                if (resultPing.compareAndSet(-1, ping)) {
-                                    latch.countDown();
-                                }
-                            }
-                        } catch (Throwable ignored) {
-                        } finally {
-                            if (finishedCount.incrementAndGet() >= 2) {
-                                latch.countDown();
-                            }
-                        }
-                    }
-                });
-
-                try {
-                    latch.await(probeWaitMs, TimeUnit.MILLISECONDS);
-                } catch (InterruptedException ignored) {}
-
-                int res = resultPing.get();
                 if (res > 0) {
                     server.setAlive(true);
                     server.setPingMs(res);
@@ -655,6 +634,29 @@ public class ServerPinger {
             WhitelistPoolManager.recordServerPing(server.getServerKey(), directPing);
         }
         return directPing;
+    }
+
+    private static int runSingleLibv2rayProbe(final String configJson, final String targetUrl, final String host, long waitMs) {
+        final AtomicInteger resultPing = new AtomicInteger(-1);
+        final CountDownLatch latch = new CountDownLatch(1);
+        probeSubPool.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    long delay = Libv2ray.measureOutboundDelay(configJson, targetUrl);
+                    if (delay > 0) {
+                        resultPing.set(clampRealisticPing(delay, host));
+                    }
+                } catch (Throwable ignored) {
+                } finally {
+                    latch.countDown();
+                }
+            }
+        });
+        try {
+            latch.await(waitMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {}
+        return resultPing.get();
     }
 
     /**
@@ -849,12 +851,79 @@ public class ServerPinger {
     }
 
     /**
+     * Fast parallel TCP preflight across candidate servers within timeoutMs (e.g. 650ms).
+     * Preserves original candidate order while filtering out dead/blackholed hosts before Wave 1.
+     */
+    public static List<VpnServer> preflightTcpBatch(List<VpnServer> candidates, int timeoutMs) {
+        List<VpnServer> reachableList = new ArrayList<>();
+        if (candidates == null || candidates.isEmpty()) {
+            return reachableList;
+        }
+        final int effTimeout = (timeoutMs > 0) ? timeoutMs : 650;
+        final List<VpnServer> slice = new ArrayList<>();
+        for (VpnServer s : candidates) {
+            if (s == null) continue;
+            String host = s.getHost();
+            int port = s.getPort();
+            if (host == null || host.trim().isEmpty() || port <= 0 || port > 65535) continue;
+            if (host.startsWith("172.64.") || host.startsWith("172.67.") || host.startsWith("104.")
+                    || "spacex.com".equalsIgnoreCase(host) || "87.228.101.3".equals(host)) {
+                continue;
+            }
+            slice.add(s);
+        }
+        if (slice.isEmpty()) {
+            return reachableList;
+        }
+
+        final boolean[] reachable = new boolean[slice.size()];
+        final CountDownLatch latch = new CountDownLatch(slice.size());
+
+        for (int i = 0; i < slice.size(); i++) {
+            final int idx = i;
+            final VpnServer s = slice.get(i);
+            pool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (pingSocketDirectFast(s.getHost(), s.getPort(), effTimeout)) {
+                            reachable[idx] = true;
+                        }
+                    } catch (Throwable ignored) {
+                    } finally {
+                        latch.countDown();
+                    }
+                }
+            });
+        }
+
+        try {
+            latch.await(effTimeout + 150L, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {}
+
+        for (int i = 0; i < slice.size(); i++) {
+            if (reachable[i]) {
+                reachableList.add(slice.get(i));
+            }
+        }
+        return reachableList;
+    }
+
+    /**
      * Benchmarks a batch of candidate servers (e.g. wave of 5 servers) simultaneously
-     * using real Xray proxy delay probes (Telegram API + GStatic 204).
-     * Returns ALL responsive servers sorted fastest-first (#1, #2, #3...) so failover can
-     * immediately step through #2 -> #3 without re-pinging.
+     * using real Xray proxy delay probes.
+     * Backward-compatible overload with TCP preflight enabled.
      */
     public static List<VpnServer> benchmarkBatchSync(List<VpnServer> batch, int timeoutMs) {
+        return benchmarkBatchSync(batch, timeoutMs, false);
+    }
+
+    /**
+     * Benchmarks a batch of candidate servers simultaneously using real Xray proxy delay probes
+     * with early exit: once the 1st alive node finishes, waits at most a 400ms grace window
+     * (or exits immediately when >= 2 alive nodes with ping <= 300ms have finished).
+     */
+    public static List<VpnServer> benchmarkBatchSync(List<VpnServer> batch, int timeoutMs, final boolean skipTcpPreflight) {
         List<VpnServer> sortedAlive = new ArrayList<>();
         if (batch == null || batch.isEmpty()) {
             return sortedAlive;
@@ -869,31 +938,75 @@ public class ServerPinger {
         }
 
         final List<VpnServer> responsive = Collections.synchronizedList(new ArrayList<VpnServer>());
-        final CountDownLatch latch = new CountDownLatch(slice.size());
+        final Object waitLock = new Object();
+        final int[] remaining = new int[]{slice.size()};
+        final int[] fastAliveCount = new int[]{0};
+        final long[] firstAliveAtMs = new long[]{0L};
 
         for (final VpnServer s : slice) {
             pool.execute(new Runnable() {
                 @Override
                 public void run() {
+                    boolean aliveNow = false;
+                    int delay = -1;
                     try {
-                        int delay = measureRealProxyDelay(s, effTimeout);
+                        delay = measureRealProxyDelay(s, effTimeout, skipTcpPreflight);
                         if (delay > 0 && s.isAlive()) {
+                            aliveNow = true;
                             responsive.add(s);
                         }
                     } catch (Throwable ignored) {
                     } finally {
-                        latch.countDown();
+                        synchronized (waitLock) {
+                            remaining[0]--;
+                            if (aliveNow) {
+                                if (firstAliveAtMs[0] == 0L) {
+                                    firstAliveAtMs[0] = System.nanoTime() / 1_000_000L;
+                                }
+                                if (delay <= 300) {
+                                    fastAliveCount[0]++;
+                                }
+                            }
+                            waitLock.notifyAll();
+                        }
                     }
                 }
             });
         }
 
-        try {
-            latch.await(effTimeout + 500L, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException ignored) {}
+        final long overallDeadlineMs = (System.nanoTime() / 1_000_000L) + effTimeout + 400L;
+        synchronized (waitLock) {
+            while (remaining[0] > 0) {
+                if (fastAliveCount[0] >= 2) {
+                    break;
+                }
+                long nowMs = System.nanoTime() / 1_000_000L;
+                long waitUntilMs = overallDeadlineMs;
+                if (firstAliveAtMs[0] > 0L) {
+                    long graceDeadlineMs = firstAliveAtMs[0] + 400L;
+                    if (graceDeadlineMs < waitUntilMs) {
+                        waitUntilMs = graceDeadlineMs;
+                    }
+                }
+                long toWaitMs = waitUntilMs - nowMs;
+                if (toWaitMs <= 0L) {
+                    break;
+                }
+                try {
+                    waitLock.wait(toWaitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
 
-        if (!responsive.isEmpty()) {
-            sortedAlive.addAll(responsive);
+        synchronized (responsive) {
+            if (!responsive.isEmpty()) {
+                sortedAlive.addAll(responsive);
+            }
+        }
+        if (!sortedAlive.isEmpty()) {
             Collections.sort(sortedAlive, new Comparator<VpnServer>() {
                 @Override
                 public int compare(VpnServer a, VpnServer b) {

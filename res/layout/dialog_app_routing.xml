@@ -14,22 +14,24 @@
         android:layout_marginBottom="12dp"
         android:background="@drawable/bg_sheet_handle" />
 
-    <!-- Header: 8dp grid aligned, zero text clipping -->
-    <RelativeLayout
+    <!-- Header: 8dp grid aligned, zero text or close-button clipping -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
         android:paddingStart="16dp"
-        android:paddingTop="4dp"
+        android:paddingTop="8dp"
         android:paddingEnd="16dp"
         android:paddingBottom="12dp">
 
         <LinearLayout
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_alignParentStart="true"
-            android:layout_centerVertical="true"
             android:layout_marginEnd="12dp"
-            android:layout_toStartOf="@+id/btnCloseAppRouting"
+            android:layout_weight="1"
             android:orientation="vertical">
 
             <TextView
@@ -55,10 +57,8 @@
 
         <FrameLayout
             android:id="@+id/btnCloseAppRouting"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:layout_alignParentEnd="true"
-            android:layout_centerVertical="true"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:background="@drawable/bg_close_btn"
             android:clickable="true"
             android:focusable="true">
@@ -67,11 +67,12 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center"
+                android:includeFontPadding="false"
                 android:text="✕"
                 android:textColor="#94A3B8"
-                android:textSize="16sp" />
+                android:textSize="14sp" />
         </FrameLayout>
-    </RelativeLayout>
+    </LinearLayout>
 
     <!-- 3-Segmented Mode Switcher: ВЫКЛ | ВКЛ | ОБХОД (Flat M3 Surface) -->
     <FrameLayout

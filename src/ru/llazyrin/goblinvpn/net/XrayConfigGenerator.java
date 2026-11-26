@@ -49,6 +49,8 @@ public class XrayConfigGenerator {
         String grpcService = "";
         String alpn = "";
         String headerType = "";
+        String hostHeader = "";
+        String xhttpMode = "auto";
 
         if (rawUri != null && !rawUri.trim().isEmpty()) {
             try {
@@ -84,6 +86,8 @@ public class XrayConfigGenerator {
                     if (queryParams.containsKey("serviceName")) grpcService = queryParams.get("serviceName");
                     if (queryParams.containsKey("alpn")) alpn = queryParams.get("alpn");
                     if (queryParams.containsKey("headerType")) headerType = queryParams.get("headerType");
+                    if (queryParams.containsKey("host")) hostHeader = queryParams.get("host");
+                    if (queryParams.containsKey("mode")) xhttpMode = queryParams.get("mode");
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Error parsing rawUri params, using server defaults", e);
@@ -124,7 +128,7 @@ public class XrayConfigGenerator {
             tunSettings.put("mtu", mtu);
             tunSettings.put("name", "xray0");
             tunSettings.put("userLevel", 8);
-            tunSettings.put("keepAlive", 10);
+            tunSettings.put("keepAlive", 45);
             tunInbound.put("settings", tunSettings);
 
             JSONObject tunSniffing = new JSONObject();
@@ -216,7 +220,7 @@ public class XrayConfigGenerator {
                 JSONObject wsSettings = new JSONObject();
                 wsSettings.put("path", wsPath != null ? wsPath : "/");
                 JSONObject headers = new JSONObject();
-                headers.put("Host", sni);
+                headers.put("Host", (hostHeader != null && !hostHeader.isEmpty()) ? hostHeader : (sni != null ? sni : ""));
                 wsSettings.put("headers", headers);
                 streamSettings.put("wsSettings", wsSettings);
             } else if ("grpc".equalsIgnoreCase(network)) {
@@ -226,6 +230,12 @@ public class XrayConfigGenerator {
                 }
                 grpcSettings.put("multiMode", true);
                 streamSettings.put("grpcSettings", grpcSettings);
+            } else if ("xhttp".equalsIgnoreCase(network)) {
+                JSONObject xhttpSettings = new JSONObject();
+                xhttpSettings.put("path", wsPath != null ? wsPath : "/");
+                xhttpSettings.put("host", (hostHeader != null && !hostHeader.isEmpty()) ? hostHeader : (sni != null ? sni : ""));
+                xhttpSettings.put("mode", (xhttpMode != null && !xhttpMode.isEmpty()) ? xhttpMode : "auto");
+                streamSettings.put("xhttpSettings", xhttpSettings);
             } else if ("tcp".equalsIgnoreCase(network) && headerType != null && "http".equalsIgnoreCase(headerType)) {
                 JSONObject tcpSettings = new JSONObject();
                 JSONObject header = new JSONObject();
@@ -234,11 +244,11 @@ public class XrayConfigGenerator {
                 streamSettings.put("tcpSettings", tcpSettings);
             }
 
-            // TCP Keepalive (10s) to prevent tunnel drop on cellular carrier NAT/GGSN idle timeouts
+            // TCP Keepalive (45s) to keep carrier NAT tables alive without holding cellular modem in RRC_CONNECTED
             JSONObject sockopt = new JSONObject();
-            sockopt.put("tcpKeepAliveInterval", 10);
-            sockopt.put("tcpKeepAliveIdle", 10);
-            sockopt.put("keepAlive", 10);
+            sockopt.put("tcpKeepAliveInterval", 45);
+            sockopt.put("tcpKeepAliveIdle", 45);
+            sockopt.put("keepAlive", 45);
             sockopt.put("tcpNoDelay", true);
             streamSettings.put("sockopt", sockopt);
 
@@ -344,6 +354,8 @@ public class XrayConfigGenerator {
         String network = "tcp";
         String wsPath = "/";
         String grpcService = "";
+        String hostHeader = "";
+        String xhttpMode = "auto";
 
         if (rawUri != null && !rawUri.trim().isEmpty()) {
             try {
@@ -375,6 +387,8 @@ public class XrayConfigGenerator {
                     if (queryParams.containsKey("type")) network = queryParams.get("type");
                     if (queryParams.containsKey("path")) wsPath = queryParams.get("path");
                     if (queryParams.containsKey("serviceName")) grpcService = queryParams.get("serviceName");
+                    if (queryParams.containsKey("host")) hostHeader = queryParams.get("host");
+                    if (queryParams.containsKey("mode")) xhttpMode = queryParams.get("mode");
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Error parsing rawUri params for benchmark", e);
@@ -394,6 +408,7 @@ public class XrayConfigGenerator {
 
             JSONObject dns = new JSONObject();
             JSONArray dnsServers = new JSONArray();
+            dnsServers.put("localhost");
             dnsServers.put("1.1.1.1");
             dnsServers.put("8.8.8.8");
             dns.put("servers", dnsServers);
@@ -448,21 +463,27 @@ public class XrayConfigGenerator {
 
             if ("ws".equalsIgnoreCase(network)) {
                 JSONObject wsSettings = new JSONObject();
-                wsSettings.put("path", wsPath);
+                wsSettings.put("path", wsPath != null ? wsPath : "/");
                 JSONObject headers = new JSONObject();
-                headers.put("Host", sni);
+                headers.put("Host", (hostHeader != null && !hostHeader.isEmpty()) ? hostHeader : (sni != null ? sni : ""));
                 wsSettings.put("headers", headers);
                 streamSettings.put("wsSettings", wsSettings);
             } else if ("grpc".equalsIgnoreCase(network)) {
                 JSONObject grpcSettings = new JSONObject();
                 grpcSettings.put("serviceName", grpcService);
                 streamSettings.put("grpcSettings", grpcSettings);
+            } else if ("xhttp".equalsIgnoreCase(network)) {
+                JSONObject xhttpSettings = new JSONObject();
+                xhttpSettings.put("path", wsPath != null ? wsPath : "/");
+                xhttpSettings.put("host", (hostHeader != null && !hostHeader.isEmpty()) ? hostHeader : (sni != null ? sni : ""));
+                xhttpSettings.put("mode", (xhttpMode != null && !xhttpMode.isEmpty()) ? xhttpMode : "auto");
+                streamSettings.put("xhttpSettings", xhttpSettings);
             }
 
             JSONObject sockopt = new JSONObject();
-            sockopt.put("tcpKeepAliveInterval", 10);
-            sockopt.put("tcpKeepAliveIdle", 10);
-            sockopt.put("keepAlive", 10);
+            sockopt.put("tcpKeepAliveInterval", 45);
+            sockopt.put("tcpKeepAliveIdle", 45);
+            sockopt.put("keepAlive", 45);
             sockopt.put("tcpNoDelay", true);
             streamSettings.put("sockopt", sockopt);
 

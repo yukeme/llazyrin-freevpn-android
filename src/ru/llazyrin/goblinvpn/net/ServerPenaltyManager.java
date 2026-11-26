@@ -40,9 +40,9 @@ public class ServerPenaltyManager {
     private final ConcurrentHashMap<String, Long> penaltyExpiryMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Integer> failureCountMap = new ConcurrentHashMap<>();
 
-    private static final long COOLDOWN_TIER_1_MS = 30 * 1000L;       // 30 seconds
-    private static final long COOLDOWN_TIER_2_MS = 90 * 1000L;       // 90 seconds
-    private static final long COOLDOWN_TIER_3_MS = 3 * 60 * 1000L;   // 3 minutes
+    private static final long COOLDOWN_TIER_1_MS = 3 * 60 * 1000L;  // 3 minutes
+    private static final long COOLDOWN_TIER_2_MS = 8 * 60 * 1000L;  // 8 minutes
+    private static final long COOLDOWN_TIER_3_MS = 20 * 60 * 1000L; // 20 minutes
 
     private ServerPenaltyManager(Context context) {
         this.appContext = context.getApplicationContext();
@@ -76,20 +76,33 @@ public class ServerPenaltyManager {
         int count = failureCountMap.containsKey(key) ? failureCountMap.get(key) + 1 : 1;
         failureCountMap.put(key, count);
 
+        boolean isProven = ru.llazyrin.goblinvpn.security.MobileProvenConfigStorage.getInstance(appContext).isProven(serverKey);
+
         long cooldownMs;
-        if (count == 1) {
-            cooldownMs = COOLDOWN_TIER_1_MS;
-        } else if (count == 2) {
-            cooldownMs = COOLDOWN_TIER_2_MS;
+        if (isProven) {
+            // Proven cellular nodes get gentle, short cooldowns (20s / 60s / 180s) so transient handover drops don't lock them out
+            if (count == 1) {
+                cooldownMs = 20 * 1000L;
+            } else if (count == 2) {
+                cooldownMs = 60 * 1000L;
+            } else {
+                cooldownMs = 180 * 1000L;
+            }
         } else {
-            cooldownMs = COOLDOWN_TIER_3_MS;
+            if (count == 1) {
+                cooldownMs = COOLDOWN_TIER_1_MS;
+            } else if (count == 2) {
+                cooldownMs = COOLDOWN_TIER_2_MS;
+            } else {
+                cooldownMs = COOLDOWN_TIER_3_MS;
+            }
         }
 
         long expiryTime = SystemClock.elapsedRealtime() + cooldownMs;
         penaltyExpiryMap.put(key, expiryTime);
 
         AppLogger.w(TAG, "⚠️ Node penalized [" + key + "]: failure #" + count
-                + ", cooldown=" + (cooldownMs / 1000) + "s");
+                + ", cooldown=" + (cooldownMs / 1000) + "s (isProven=" + isProven + ")");
     }
 
     /**
@@ -130,14 +143,17 @@ public class ServerPenaltyManager {
         if (serverKey == null || serverKey.trim().isEmpty()) return;
         String key = getNormalizedKey(serverKey);
 
-        penaltyExpiryMap.remove(key);
+        Long prevExpiry = penaltyExpiryMap.remove(key);
         Integer count = failureCountMap.get(key);
+        boolean hadFailures = (count != null && count > 0);
         if (count != null && count > 1) {
             failureCountMap.put(key, count - 1);
         } else {
             failureCountMap.remove(key);
         }
-        AppLogger.i(TAG, "✅ Node rewarded [" + key + "]: penalties cleared / decayed");
+        if (hadFailures || prevExpiry != null) {
+            AppLogger.i(TAG, "✅ Node rewarded [" + key + "]: penalties cleared / decayed");
+        }
     }
 
     /**
@@ -165,6 +181,32 @@ public class ServerPenaltyManager {
         result.addAll(healthy);
         result.addAll(penalized);
         return result;
+    }
+
+    /**
+     * Prunes expired penalties and halves active penalty cooldowns (minimum 15s)
+     * so recently failing nodes remain demoted across user-initiated reconnects.
+     */
+    public synchronized void pruneExpiredAndDecay() {
+        long now = SystemClock.elapsedRealtime();
+        java.util.Iterator<Map.Entry<String, Long>> it = penaltyExpiryMap.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, Long> entry = it.next();
+            long remaining = entry.getValue() - now;
+            if (remaining <= 0L) {
+                it.remove();
+                String key = entry.getKey();
+                Integer count = failureCountMap.get(key);
+                if (count == null || count <= 1) {
+                    failureCountMap.remove(key);
+                } else {
+                    failureCountMap.put(key, count - 1);
+                }
+            } else {
+                long decayed = Math.max(15_000L, remaining / 2L);
+                entry.setValue(now + decayed);
+            }
+        }
     }
 
     /**

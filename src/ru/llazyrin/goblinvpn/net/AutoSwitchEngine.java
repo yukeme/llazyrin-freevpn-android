@@ -80,8 +80,9 @@ public class AutoSwitchEngine {
     private static final long STANDBY_FRESHNESS_TTL_MS = 180_000L; // 3 minutes max cache validity
     private static final int BATCH_TEST_SIZE = 5;
     public static final int CELLULAR_WAVE_BATCH_SIZE = 5;
-    public static final int CELLULAR_WAVE_TIMEOUT_MS = 2200;
+    public static final int CELLULAR_WAVE_TIMEOUT_MS = 2800;
     public static final int CELLULAR_PRIMARY_WAVE_LIMIT = 20; // 4 waves of 5 servers = 20 candidates
+    private static final int MAX_WAVE_SWEEPS_PER_CYCLE = 2;
     private static final long COMMUNITY_REPORT_COOLDOWN_MS = 1_800_000L; // 30 minutes per server
 
     public enum NetworkProfile {
@@ -147,6 +148,7 @@ public class AutoSwitchEngine {
     private final List<String> recentSwitchedServerKeys = Collections.synchronizedList(new ArrayList<String>());
     private static final int MAX_RECENT_HISTORY = 4;
     private final java.util.concurrent.atomic.AtomicInteger initialFailoverAttempts = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicInteger waveSweepsInConnectCycle = new java.util.concurrent.atomic.AtomicInteger(0);
     private final Set<String> sessionHandshakeFailedKeys = Collections.synchronizedSet(new HashSet<String>());
     private volatile boolean isAppInForeground = true;
 
@@ -332,6 +334,25 @@ public class AutoSwitchEngine {
             return s;
         }
 
+        // Extra fallback on cellular: untried emergency reserve servers (even outside strict CIDR list)
+        if (isCellular) {
+            try {
+                List<VpnServer> emergency = EmergencyConfigStorage.loadEmergencyReserve(appContext);
+                if (emergency != null) {
+                    for (VpnServer s : emergency) {
+                        if (s == null || s.getHost() == null || "193.233.199.233".equals(s.getHost())) continue;
+                        if (WhitelistPoolManager.isBlockedMobileHost(s.getHost()) || WhitelistPoolManager.isBlockedMobileSni(s.getSni())) continue;
+                        String key = s.getServerKey();
+                        if (key.equalsIgnoreCase(failedKey) || MainActivity.isKnownDeadHost(s.getHost())) continue;
+                        if (sessionHandshakeFailedKeys.contains(key.toLowerCase(Locale.ROOT))) continue;
+                        AppLogger.i(TAG, "pickNextEligibleCandidate (Emergency Fallback) -> " + s.getDisplayName()
+                                + " [" + s.getHost() + ":" + s.getPort() + "] (SNI=" + s.getSni() + ")");
+                        return s;
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+
         // Fourth pass: all candidates in pool have been tried this session. Reset session exclusions to restart fresh rotation!
         AppLogger.i(TAG, "⚡ All candidates in pool were tried this session. Resetting session history to restart fresh full-cycle rotation.");
         sessionHandshakeFailedKeys.clear();
@@ -360,6 +381,7 @@ public class AutoSwitchEngine {
      */
     public synchronized void notifyHandshakeSucceeded(VpnServer server) {
         initialFailoverAttempts.set(0);
+        waveSweepsInConnectCycle.set(0);
         sessionHandshakeFailedKeys.clear();
         currentConnectedServer = server;
         AppLogger.i(TAG, "✅ AutoSwitchEngine: Handshake verified on "
@@ -376,6 +398,7 @@ public class AutoSwitchEngine {
 
     public synchronized void notifyUserInitiatedConnect() {
         initialFailoverAttempts.set(0);
+        waveSweepsInConnectCycle.set(0);
         sessionHandshakeFailedKeys.clear();
         recentSwitchedServerKeys.clear();
         verifiedCellularQueue.clear();
@@ -561,10 +584,29 @@ public class AutoSwitchEngine {
             return queued;
         }
 
+        int sweepNum = waveSweepsInConnectCycle.incrementAndGet();
+
         List<VpnServer> candidates = assembleCellularCandidateOrder(extraExcluded);
         if (candidates.isEmpty()) {
-            // Reset session exclusions if everything in pool has already been tried
-            AppLogger.i(TAG, "⚡ All cellular candidates excluded this session; resetting exclusions for fresh wave sweep.");
+            // Also include Emergency Reserve / Builtin fallback before resetting failed keys
+            try {
+                List<VpnServer> emergency = EmergencyConfigStorage.loadEmergencyReserve(appContext);
+                if (emergency != null) {
+                    for (VpnServer es : emergency) {
+                        if (es != null && es.getHost() != null
+                                && !"193.233.199.233".equals(es.getHost())
+                                && !MainActivity.isKnownDeadHost(es.getHost())
+                                && !WhitelistPoolManager.isBlockedMobileHost(es.getHost())
+                                && !WhitelistPoolManager.isBlockedMobileSni(es.getSni())
+                                && !sessionHandshakeFailedKeys.contains(es.getServerKey().toLowerCase(Locale.ROOT))) {
+                            candidates.add(es);
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (candidates.isEmpty() && sweepNum <= 1) {
+            AppLogger.i(TAG, "⚡ All cellular candidates excluded; resetting exclusions once for fresh wave sweep.");
             sessionHandshakeFailedKeys.clear();
             failedServerCooldowns.clear();
             candidates = assembleCellularCandidateOrder(extraExcluded);
@@ -573,7 +615,7 @@ public class AutoSwitchEngine {
             return null;
         }
 
-        // Fast parallel TCP preflight (650ms) over top 12 non-blacklisted candidates before Wave 1
+        // Fast parallel TCP preflight (1050ms) across up to 30 top candidates to rank by TCP SYN-ACK RTT
         List<VpnServer> preflightSlice = new ArrayList<>();
         Set<String> preflightKeys = new HashSet<>();
         for (VpnServer c : candidates) {
@@ -581,11 +623,11 @@ public class AutoSwitchEngine {
             if (!isServerInCooldown(c.getServerKey()) && !ServerPenaltyManager.getInstance(appContext).isPenalized(c.getServerKey())) {
                 preflightSlice.add(c);
                 preflightKeys.add(c.getServerKey().toLowerCase(Locale.ROOT));
-                if (preflightSlice.size() >= 12) break;
+                if (preflightSlice.size() >= 30) break;
             }
         }
         if (preflightSlice.isEmpty()) {
-            for (int i = 0; i < Math.min(candidates.size(), 12); i++) {
+            for (int i = 0; i < Math.min(candidates.size(), 30); i++) {
                 VpnServer c = candidates.get(i);
                 if (c != null) {
                     preflightSlice.add(c);
@@ -594,31 +636,28 @@ public class AutoSwitchEngine {
             }
         }
 
-        List<VpnServer> tcpAlive = ServerPinger.preflightTcpBatch(preflightSlice, 650);
+        List<VpnServer> tcpAlive = ServerPinger.preflightTcpBatch(preflightSlice, 1050);
         if ((cancelFlag != null && cancelFlag.get()) || GoblinVpnService.isExplicitUserDisconnect) {
             return null;
         }
-        AppLogger.i(TAG, "⚡ [TCP Preflight] " + tcpAlive.size() + "/" + preflightSlice.size() + " top candidates reachable in <=650ms");
+        AppLogger.i(TAG, "⚡ [TCP Preflight] " + tcpAlive.size() + "/" + preflightSlice.size() + " top candidates reachable in <=1050ms");
 
-        List<VpnServer> effectiveCandidates = new ArrayList<>();
-        effectiveCandidates.addAll(tcpAlive);
+        List<VpnServer> effectiveCandidates = new ArrayList<>(tcpAlive);
         for (VpnServer c : candidates) {
             if (c != null && !preflightKeys.contains(c.getServerKey().toLowerCase(Locale.ROOT))) {
                 effectiveCandidates.add(c);
             }
         }
-        boolean usedTcpPreflight = !tcpAlive.isEmpty();
         if (effectiveCandidates.isEmpty()) {
-            // Preflight filtered everything; preserve original fallback candidate list
-            effectiveCandidates = candidates;
-            usedTcpPreflight = false;
+            // TCP preflight filtered everything (e.g., transient carrier stall): fall back to original candidates
+            effectiveCandidates.addAll(candidates);
+            preflightKeys.clear();
         }
 
         int totalPrimary = Math.min(effectiveCandidates.size(), CELLULAR_PRIMARY_WAVE_LIMIT);
         int totalWaves = Math.max(1, (totalPrimary + CELLULAR_WAVE_BATCH_SIZE - 1) / CELLULAR_WAVE_BATCH_SIZE);
 
-        // Run up to totalPrimary in batches of 5 (then overflow if all primary failed)
-        int maxScan = effectiveCandidates.size();
+        int maxScan = Math.min(effectiveCandidates.size(), 25);
         for (int offset = 0; offset < maxScan; offset += CELLULAR_WAVE_BATCH_SIZE) {
             if ((cancelFlag != null && cancelFlag.get()) || GoblinVpnService.isExplicitUserDisconnect) {
                 AppLogger.i(TAG, "⚡ Wave selection aborted (user disconnected or superseded).");
@@ -636,16 +675,20 @@ public class AutoSwitchEngine {
                 } catch (Throwable ignored) {}
             }
 
+            boolean waveAllPreflighted = !preflightKeys.isEmpty();
             StringBuilder targetsDesc = new StringBuilder();
             for (int i = 0; i < wave.size(); i++) {
                 VpnServer w = wave.get(i);
                 if (i > 0) targetsDesc.append(", ");
                 targetsDesc.append(w.getHost()).append(":").append(w.getPort()).append("(").append(w.getSni()).append(")");
+                if (waveAllPreflighted && !preflightKeys.contains(w.getServerKey().toLowerCase(Locale.ROOT))) {
+                    waveAllPreflighted = false;
+                }
             }
             AppLogger.i(TAG, "📡 [Wave " + waveIdx + "/" + displayTotal + "] Pinging batch of " + wave.size()
-                    + " cellular nodes via Telegram API: [" + targetsDesc.toString() + "]");
+                    + " cellular nodes (HTTP 204): [" + targetsDesc.toString() + "]");
 
-            List<VpnServer> waveAlive = ServerPinger.benchmarkBatchSync(wave, CELLULAR_WAVE_TIMEOUT_MS, usedTcpPreflight);
+            List<VpnServer> waveAlive = ServerPinger.benchmarkBatchSync(wave, CELLULAR_WAVE_TIMEOUT_MS, waveAllPreflighted);
 
             if ((cancelFlag != null && cancelFlag.get()) || GoblinVpnService.isExplicitUserDisconnect) {
                 return null;
@@ -677,10 +720,9 @@ public class AutoSwitchEngine {
                 return winner;
             }
 
-            // Record cooldown/session skip for the 5 failed nodes in this wave so failover advances
+            // Cool down dead wave nodes for 60s (do NOT wipe all session keys repeatedly)
             for (VpnServer dead : wave) {
                 if (dead != null) {
-                    sessionHandshakeFailedKeys.add(dead.getServerKey().toLowerCase(Locale.ROOT));
                     failedServerCooldowns.put(dead.getServerKey(), SystemClock.elapsedRealtime() + 60_000L);
                 }
             }
@@ -688,9 +730,62 @@ public class AutoSwitchEngine {
                     + " responded; advancing immediately to next batch of 5...");
         }
 
-        // All waves failed probe — emergency fallback to top unprobed candidate
+        // All proxy waves returned 0 alive: enqueue TCP-reachable nodes directly into verifiedCellularQueue
+        // so Watchdog tests them sequentially without looping wave animations!
+        long nowFallbackTs = SystemClock.elapsedRealtime();
+        if (!tcpAlive.isEmpty()) {
+            verifiedCellularQueue.clear();
+            verifiedQueueTimestampMs = nowFallbackTs;
+            for (int i = 1; i < Math.min(tcpAlive.size(), 6); i++) {
+                verifiedCellularQueue.add(tcpAlive.get(i));
+            }
+            VpnServer tcpFirst = tcpAlive.get(0);
+            AppLogger.w(TAG, "⚠️ Waves yielded 0 HTTP-204 hits; queued " + verifiedCellularQueue.size()
+                    + " TCP-reachable backups, trying: " + tcpFirst.getDisplayName() + " [" + tcpFirst.getHost() + "]");
+            return tcpFirst;
+        }
+
+        // Last resort when TCP preflight was also empty: quick direct benchmark on candidates + emergency reserve
+        List<VpnServer> fallbackPool = new ArrayList<>();
+        Set<String> seenFallback = new HashSet<>();
+        for (VpnServer c : candidates) {
+            if (c != null && seenFallback.add(c.getServerKey().toLowerCase(Locale.ROOT))) {
+                fallbackPool.add(c);
+                if (fallbackPool.size() >= 8) break;
+            }
+        }
+        try {
+            List<VpnServer> emergency = EmergencyConfigStorage.loadEmergencyReserve(appContext);
+            if (emergency != null) {
+                for (VpnServer es : emergency) {
+                    if (es != null && es.getHost() != null
+                            && !"193.233.199.233".equals(es.getHost())
+                            && !MainActivity.isKnownDeadHost(es.getHost())
+                            && !WhitelistPoolManager.isBlockedMobileHost(es.getHost())
+                            && !WhitelistPoolManager.isBlockedMobileSni(es.getSni())
+                            && seenFallback.add(es.getServerKey().toLowerCase(Locale.ROOT))) {
+                        fallbackPool.add(es);
+                        if (fallbackPool.size() >= 12) break;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        List<VpnServer> directAlive = ServerPinger.benchmarkServersSync(fallbackPool, 1500);
+        if (!directAlive.isEmpty()) {
+            verifiedCellularQueue.clear();
+            verifiedQueueTimestampMs = SystemClock.elapsedRealtime();
+            for (int i = 1; i < Math.min(directAlive.size(), 5); i++) {
+                verifiedCellularQueue.add(directAlive.get(i));
+            }
+            VpnServer directFirst = directAlive.get(0);
+            AppLogger.w(TAG, "⚠️ Direct TLS fallback picked: " + directFirst.getDisplayName()
+                    + " [" + directFirst.getHost() + "] (queued " + verifiedCellularQueue.size() + " backups)");
+            return directFirst;
+        }
+
         VpnServer fallback = candidates.get(0);
-        AppLogger.w(TAG, "⚠️ All waves returned 0 alive via preflight; falling back to top candidate: "
+        AppLogger.w(TAG, "⚠️ All wave & direct probes returned 0 alive; falling back to top candidate: "
                 + fallback.getDisplayName() + " [" + fallback.getHost() + "]");
         return fallback;
     }
@@ -728,15 +823,17 @@ public class AutoSwitchEngine {
                     + " (" + failedServer.getHost() + ")]. Failure attempt #" + attempt);
         }
 
-        int maxAttempts = isCellular ? 24 : 8;
+        int maxAttempts = isCellular ? 10 : 8;
         if (attempt > maxAttempts) {
-            AppLogger.i(TAG, "Failover cycle reached " + maxAttempts + " attempts. Resetting attempt counters and triggering emergency mobile refresh.");
+            AppLogger.w(TAG, "🛑 Failover cycle reached " + maxAttempts + " attempts without establishing tunnel. Stopping cleanly instead of endless wave loop.");
             initialFailoverAttempts.set(0);
-            sessionHandshakeFailedKeys.clear();
-            failedServerCooldowns.clear();
+            waveSweepsInConnectCycle.set(0);
             if (isCellular) {
                 WhitelistPoolManager.getInstance(appContext).triggerEmergencyRefresh();
             }
+            GoblinVpnService.onPinnedConnectionFailed(failedServer,
+                    "Не удалось автоматически подключиться на мобильной сети. Выберите сервер вручную или повторите попытку");
+            return;
         }
 
         // При 3-х сбоях на сотовой сети — экстренное фоновое обновление мобильных конфигов
@@ -750,19 +847,33 @@ public class AutoSwitchEngine {
 
         if (isCellular) {
             // =========================================================================
-            // НА СОТОВОЙ СВЯЗИ (Build 67):
-            // 1. Сначала мгновенно (0 мс) берем #2/#3 из уже пропингованной 5-серверной волны
-            // 2. Если очередь волны пуста — запускаем следующую волну по 5 серверов через Telegram API
+            // НА СОТОВОЙ СВЯЗИ (Build 71):
+            // 1. Сначала мгновенно (0 мс) берем #2/#3 из очереди (волны или TCP preflight)
+            // 2. Волновой поиск запускается не более MAX_WAVE_SWEEPS_PER_CYCLE (2) раз за цикл
+            // 3. Дальше — прямой перебор оставшихся кандидатов без циклического сброса волн
             // =========================================================================
             next = popVerifiedCellularServer();
             if (next != null) {
                 AppLogger.i(TAG, "⚡ [Wave Failover #" + attempt + "] Switching immediately (0ms) to queued #next server: "
                         + next.getDisplayName() + " [" + next.getHost() + "] (" + next.getPingMs() + "ms)");
-                seamlessConnectToServer(next, "Резервный узел из волны (попытка " + attempt + ")");
+                seamlessConnectToServer(next, "Резервный узел из очереди (попытка " + attempt + ")");
                 triggerImmediateBenchmark();
-            } else {
-                AppLogger.i(TAG, "⚡ [Wave Failover #" + attempt + "] Verified queue exhausted; launching next 5-server Telegram wave probe...");
+            } else if (waveSweepsInConnectCycle.get() < MAX_WAVE_SWEEPS_PER_CYCLE) {
+                AppLogger.i(TAG, "⚡ [Wave Failover #" + attempt + "] Verified queue exhausted; launching wave sweep ("
+                        + (waveSweepsInConnectCycle.get() + 1) + "/" + MAX_WAVE_SWEEPS_PER_CYCLE + ")...");
                 seamlessConnectToWaveSearch("Подбор следующей 5-ки серверов (попытка " + attempt + ")");
+            } else {
+                next = pickNextEligibleCandidate(failedServer);
+                if (next != null) {
+                    AppLogger.i(TAG, "⚡ [Direct Fallback #" + attempt + "] Wave budget spent; trying direct candidate: "
+                            + next.getDisplayName() + " [" + next.getHost() + "]");
+                    seamlessConnectToServer(next, "Прямой подбор узла (попытка " + attempt + ")");
+                } else {
+                    initialFailoverAttempts.set(0);
+                    waveSweepsInConnectCycle.set(0);
+                    GoblinVpnService.onPinnedConnectionFailed(failedServer,
+                            "Не удалось автоматически подключиться на мобильной сети. Выберите сервер вручную или повторите попытку");
+                }
             }
             return;
         } else {
@@ -967,6 +1078,9 @@ public class AutoSwitchEngine {
     }
 
     private synchronized void checkUnderlyingTransportChange() {
+        if (GoblinVpnService.isWaveSelecting()) {
+            return; // Avoid restarting an in-flight cellular wave sweep from spurious VPN/network callbacks
+        }
         long now = SystemClock.elapsedRealtime();
         boolean nowCellular = WhitelistPoolManager.isRunningOnCellular(appContext);
         if (nowCellular && !lastWasCellular) {
@@ -999,6 +1113,10 @@ public class AutoSwitchEngine {
 
         // 3. Если VPN активен — переподключаем туннель на сотовую сеть
         VpnState state = GoblinVpnService.getCurrentState();
+        if (state == VpnState.CONNECTING && GoblinVpnService.isWaveSelecting()) {
+            AppLogger.i(TAG, "Cellular wave selection already active; skipping duplicate handover restart.");
+            return;
+        }
         if (state == VpnState.CONNECTED || state == VpnState.CONNECTING) {
             handoverExecutor.execute(new Runnable() {
                 @Override

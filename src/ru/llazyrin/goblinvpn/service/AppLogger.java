@@ -273,6 +273,17 @@ public class AppLogger {
     }
 
     /**
+     * Вызывается при переходе VPN в CONNECTED: однократно отправляет накопившиеся
+     * в оффлайне логи (если удалённое логирование разрешено и очередь не пуста).
+     */
+    public static void flushIfPending() {
+        if (!AppTelemetryClient.isRemoteLoggingEnabled() || queueSize.get() <= 0) {
+            return;
+        }
+        triggerFlushAsync();
+    }
+
+    /**
      * Вызывается клиентом телеметрии при смене серверного статуса logging_enabled.
      */
     public static void onRemoteLoggingStateChanged(boolean enabled) {

@@ -102,7 +102,12 @@ public class GoblinVpnService extends VpnService {
     private static volatile long lastSpeedRx = 0;
     private static volatile long lastSpeedTx = 0;
     private static volatile String connectionStageHint = null;
+    private static volatile boolean waveSelecting = false;
     private volatile AtomicBoolean waveCancelToken = new AtomicBoolean(false);
+
+    public static boolean isWaveSelecting() {
+        return waveSelecting;
+    }
 
     public static String getConnectionStageHint() {
         return connectionStageHint;
@@ -547,18 +552,23 @@ public class GoblinVpnService extends VpnService {
                     if (needWaveResolution) {
                         boolean isCellNow = WhitelistPoolManager.isRunningOnCellular(GoblinVpnService.this);
                         if (isCellNow) {
-                            targetNode = AutoSwitchEngine.getInstance(GoblinVpnService.this).selectCellularServerByWaves(
-                                    null,
-                                    new AutoSwitchEngine.WaveProgressListener() {
-                                        @Override
-                                        public void onWaveProgress(int waveIndex, int totalWaves, int batchSize) {
-                                            if (isRunning && activeSessionId.get() == session && !currentWaveCancel.get()) {
-                                                setConnectionStageHint("Волна " + waveIndex + "/" + totalWaves + "…");
+                            waveSelecting = true;
+                            try {
+                                targetNode = AutoSwitchEngine.getInstance(GoblinVpnService.this).selectCellularServerByWaves(
+                                        null,
+                                        new AutoSwitchEngine.WaveProgressListener() {
+                                            @Override
+                                            public void onWaveProgress(int waveIndex, int totalWaves, int batchSize) {
+                                                if (isRunning && activeSessionId.get() == session && !currentWaveCancel.get()) {
+                                                    setConnectionStageHint("Волна " + waveIndex + "/" + totalWaves + "…");
+                                                }
                                             }
-                                        }
-                                    },
-                                    currentWaveCancel
-                            );
+                                        },
+                                        currentWaveCancel
+                                );
+                            } finally {
+                                waveSelecting = false;
+                            }
                         } else {
                             targetNode = AutoSwitchEngine.getInstance(GoblinVpnService.this).selectFallbackNonCellularServer();
                         }
@@ -989,6 +999,7 @@ public class GoblinVpnService extends VpnService {
     private synchronized void stopTunnel() {
         activeSessionId.incrementAndGet();
         isRunning = false;
+        waveSelecting = false;
         try {
             if (waveCancelToken != null) waveCancelToken.set(true);
         } catch (Throwable ignored) {}
@@ -1175,6 +1186,7 @@ public class GoblinVpnService extends VpnService {
             AppLogger.i(TAG, "VPN CONNECTED! Node: " + (currentServer != null ? currentServer.getDisplayName() : "Auto")
                     + " (" + (currentServer != null ? currentServer.getHost() : "") + ")");
             AppTelemetryClient.sendHeartbeat(this, true, currentServer);
+            AppLogger.flushIfPending();
             try {
                 AutoSwitchEngine.getInstance(this).onVpnConnected(currentServer);
             } catch (Exception e) {

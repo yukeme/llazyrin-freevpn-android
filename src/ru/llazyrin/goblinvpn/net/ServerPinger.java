@@ -68,7 +68,7 @@ public class ServerPinger {
     public static final String HTTP_204_CLOUDFLARE = "http://cp.cloudflare.com/generate_204";
     public static final String HTTP_204_GSTATIC = "http://connectivitycheck.gstatic.com/generate_204";
 
-    private static final int WORKER_THREADS = 12;
+    private static final int WORKER_THREADS = 16;
     private static final ThreadPoolExecutor pool = new ThreadPoolExecutor(
             WORKER_THREADS, WORKER_THREADS, 30L, TimeUnit.SECONDS,
             new LinkedBlockingQueue<Runnable>(),
@@ -84,9 +84,9 @@ public class ServerPinger {
     );
 
     // Shared pool for Libv2ray sub-probes inside measureRealProxyDelay.
-    // SynchronousQueue avoids queue starvation behind timed-out native Go probes.
+    // SynchronousQueue avoids queue starvation; AbortPolicy prevents caller blocking behind hung Go probes.
     private static final ThreadPoolExecutor probeSubPool = new ThreadPoolExecutor(
-            10, 32, 25L, TimeUnit.SECONDS,
+            10, 64, 25L, TimeUnit.SECONDS,
             new SynchronousQueue<Runnable>(),
             new ThreadFactory() {
                 private final AtomicInteger count = new AtomicInteger(0);
@@ -97,7 +97,7 @@ public class ServerPinger {
                     return t;
                 }
             },
-            new ThreadPoolExecutor.CallerRunsPolicy()
+            new ThreadPoolExecutor.AbortPolicy()
     );
 
     static {
@@ -486,24 +486,22 @@ public class ServerPinger {
      * which invokes coreController.measureDelay() directly inside the active Xray outbound handler.
      */
     public static int checkLiveTunnelHealth(boolean isCellular) {
-        // 1. Primary endpoint: Telegram API through active Xray tunnel
-        int rtt = GoblinVpnService.measureActiveTunnelDelay(TELEGRAM_API_URL);
-        if (rtt > 0) {
-            return clampRealisticPing(rtt, "telegram_active_tunnel");
-        }
-
-        // 2. Secondary endpoint: Google connectivitycheck 204 through active Xray tunnel
-        rtt = GoblinVpnService.measureActiveTunnelDelay(HTTP_204_GSTATIC);
+        // 1. Primary endpoint: fast Google connectivitycheck 204 through active Xray tunnel
+        int rtt = GoblinVpnService.measureActiveTunnelDelay(HTTP_204_GSTATIC);
         if (rtt > 0) {
             return clampRealisticPing(rtt, "gstatic_active_tunnel");
         }
 
-        // 3. Tertiary endpoint: Cloudflare generate_204 through active Xray tunnel (Wi-Fi only)
-        if (!isCellular) {
-            rtt = GoblinVpnService.measureActiveTunnelDelay(HTTP_204_CLOUDFLARE);
-            if (rtt > 0) {
-                return clampRealisticPing(rtt, "cloudflare_active_tunnel");
-            }
+        // 2. Secondary endpoint: Cloudflare generate_204 through active Xray tunnel
+        rtt = GoblinVpnService.measureActiveTunnelDelay(HTTP_204_CLOUDFLARE);
+        if (rtt > 0) {
+            return clampRealisticPing(rtt, "cloudflare_active_tunnel");
+        }
+
+        // 3. Tertiary endpoint: Telegram API through active Xray tunnel
+        rtt = GoblinVpnService.measureActiveTunnelDelay(TELEGRAM_API_URL);
+        if (rtt > 0) {
+            return clampRealisticPing(rtt, "telegram_active_tunnel");
         }
 
         return -1;
@@ -533,20 +531,26 @@ public class ServerPinger {
      * Rejects unreachable or blackholed IPs within timeoutMs (typically 1200ms)
      * before incurring expensive Xray/Libv2ray configuration generation.
      */
-    public static boolean pingSocketDirectFast(String host, int port, int timeoutMs) {
-        if (host == null || host.trim().isEmpty() || port <= 0) return false;
+    public static int pingSocketDirectFastWithRtt(String host, int port, int timeoutMs) {
+        if (host == null || host.trim().isEmpty() || port <= 0) return -1;
         Socket socket = new Socket();
+        long t0 = System.nanoTime();
         try {
             GoblinVpnService.protectSocket(socket);
             socket.setTcpNoDelay(true);
             socket.setSoTimeout(timeoutMs);
             socket.connect(new InetSocketAddress(host.trim(), port), timeoutMs);
-            return true;
+            long elapsedMs = (System.nanoTime() - t0) / 1_000_000L;
+            return (int) Math.max(1L, elapsedMs);
         } catch (Throwable t) {
-            return false;
+            return -1;
         } finally {
             try { socket.close(); } catch (Throwable ignored) {}
         }
+    }
+
+    public static boolean pingSocketDirectFast(String host, int port, int timeoutMs) {
+        return pingSocketDirectFastWithRtt(host, port, timeoutMs) > 0;
     }
 
     /**
@@ -559,8 +563,8 @@ public class ServerPinger {
 
     /**
      * Measures real HTTP proxy latency through native Xray core Libv2ray without TUN.
-     * Runs only the single primary Libv2ray probe first (Telegram on cellular, GStatic on Wi-Fi),
-     * falling back to the secondary endpoint only if the primary returns <= 0 within budget.
+     * Uses fast HTTP 204 endpoints (GStatic primary, Cloudflare fallback) so cellular waves do not
+     * stall or false-fail behind slower full HTTPS API probes.
      */
     public static int measureRealProxyDelay(final VpnServer server, int timeoutMs, boolean skipTcpPreflight) {
         if (server == null) return -1;
@@ -569,7 +573,7 @@ public class ServerPinger {
 
         // 0. Instant Socket Preflight: if raw TCP socket is blocked/unreachable, fail fast
         if (!skipTcpPreflight) {
-            int preflightCapMs = (int) Math.min(650L, overallBudgetMs);
+            int preflightCapMs = (int) Math.min(1000L, overallBudgetMs);
             if (!pingSocketDirectFast(server.getHost(), server.getPort(), preflightCapMs)) {
                 server.setAlive(false);
                 server.setPingMs(-1);
@@ -578,22 +582,18 @@ public class ServerPinger {
         }
 
         long elapsedPreflightMs = (System.nanoTime() / 1_000_000L) - startMs;
-        long probeWaitMs = Math.max(500L, overallBudgetMs - elapsedPreflightMs);
+        long probeWaitMs = Math.max(600L, overallBudgetMs - elapsedPreflightMs);
 
-        // 1. Single primary in-tunnel probe via Libv2ray.measureOutboundDelay, secondary only on fallback
+        // 1. Lightweight HTTP 204 egress probes via encrypted Xray outbound
         try {
             final String configJson = XrayConfigGenerator.generateBenchmarkConfig(server);
             if (configJson != null && !configJson.trim().isEmpty()) {
-                boolean isCellular = WhitelistPoolManager.isLastKnownCellular();
-                String primaryUrl = isCellular ? TELEGRAM_API_URL : HTTP_204_GSTATIC;
-                String secondaryUrl = isCellular ? HTTP_204_GSTATIC : TELEGRAM_API_URL;
-
-                int res = runSingleLibv2rayProbe(configJson, primaryUrl, server.getHost(), probeWaitMs);
+                int res = runSingleLibv2rayProbe(configJson, HTTP_204_GSTATIC, server.getHost(), probeWaitMs);
                 if (res <= 0) {
                     long elapsedNowMs = (System.nanoTime() / 1_000_000L) - startMs;
                     long remainingMs = overallBudgetMs - elapsedNowMs;
-                    if (remainingMs >= 350L) {
-                        res = runSingleLibv2rayProbe(configJson, secondaryUrl, server.getHost(), remainingMs);
+                    if (remainingMs >= 400L) {
+                        res = runSingleLibv2rayProbe(configJson, HTTP_204_CLOUDFLARE, server.getHost(), remainingMs);
                     }
                 }
 
@@ -639,20 +639,24 @@ public class ServerPinger {
     private static int runSingleLibv2rayProbe(final String configJson, final String targetUrl, final String host, long waitMs) {
         final AtomicInteger resultPing = new AtomicInteger(-1);
         final CountDownLatch latch = new CountDownLatch(1);
-        probeSubPool.execute(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    long delay = Libv2ray.measureOutboundDelay(configJson, targetUrl);
-                    if (delay > 0) {
-                        resultPing.set(clampRealisticPing(delay, host));
+        try {
+            probeSubPool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        long delay = Libv2ray.measureOutboundDelay(configJson, targetUrl);
+                        if (delay > 0) {
+                            resultPing.set(clampRealisticPing(delay, host));
+                        }
+                    } catch (Throwable ignored) {
+                    } finally {
+                        latch.countDown();
                     }
-                } catch (Throwable ignored) {
-                } finally {
-                    latch.countDown();
                 }
-            }
-        });
+            });
+        } catch (Throwable rejected) {
+            return -1;
+        }
         try {
             latch.await(waitMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException ignored) {}
@@ -851,15 +855,15 @@ public class ServerPinger {
     }
 
     /**
-     * Fast parallel TCP preflight across candidate servers within timeoutMs (e.g. 650ms).
-     * Preserves original candidate order while filtering out dead/blackholed hosts before Wave 1.
+     * Fast parallel TCP preflight across candidate servers within timeoutMs (e.g. 1050ms).
+     * Filters out dead/blackholed hosts and ranks reachable nodes by lowest TCP SYN-ACK RTT before Wave 1.
      */
     public static List<VpnServer> preflightTcpBatch(List<VpnServer> candidates, int timeoutMs) {
         List<VpnServer> reachableList = new ArrayList<>();
         if (candidates == null || candidates.isEmpty()) {
             return reachableList;
         }
-        final int effTimeout = (timeoutMs > 0) ? timeoutMs : 650;
+        final int effTimeout = (timeoutMs > 0) ? timeoutMs : 1050;
         final List<VpnServer> slice = new ArrayList<>();
         for (VpnServer s : candidates) {
             if (s == null) continue;
@@ -876,7 +880,8 @@ public class ServerPinger {
             return reachableList;
         }
 
-        final boolean[] reachable = new boolean[slice.size()];
+        final int[] rtts = new int[slice.size()];
+        for (int i = 0; i < rtts.length; i++) rtts[i] = -1;
         final CountDownLatch latch = new CountDownLatch(slice.size());
 
         for (int i = 0; i < slice.size(); i++) {
@@ -886,8 +891,9 @@ public class ServerPinger {
                 @Override
                 public void run() {
                     try {
-                        if (pingSocketDirectFast(s.getHost(), s.getPort(), effTimeout)) {
-                            reachable[idx] = true;
+                        int tcpRtt = pingSocketDirectFastWithRtt(s.getHost(), s.getPort(), effTimeout);
+                        if (tcpRtt > 0) {
+                            rtts[idx] = tcpRtt;
                         }
                     } catch (Throwable ignored) {
                     } finally {
@@ -898,13 +904,24 @@ public class ServerPinger {
         }
 
         try {
-            latch.await(effTimeout + 150L, TimeUnit.MILLISECONDS);
+            latch.await(effTimeout + 250L, TimeUnit.MILLISECONDS);
         } catch (InterruptedException ignored) {}
 
+        List<Integer> aliveIdx = new ArrayList<>();
         for (int i = 0; i < slice.size(); i++) {
-            if (reachable[i]) {
-                reachableList.add(slice.get(i));
+            if (rtts[i] > 0) {
+                aliveIdx.add(i);
             }
+        }
+        Collections.sort(aliveIdx, new Comparator<Integer>() {
+            @Override
+            public int compare(Integer a, Integer b) {
+                return Integer.compare(rtts[a], rtts[b]);
+            }
+        });
+        for (int idx : aliveIdx) {
+            VpnServer s = slice.get(idx);
+            reachableList.add(s);
         }
         return reachableList;
     }

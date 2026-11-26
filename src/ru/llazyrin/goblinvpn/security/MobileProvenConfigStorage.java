@@ -302,20 +302,22 @@ public class MobileProvenConfigStorage {
     public synchronized void recordFailure(String serverKey) {
         if (serverKey == null || serverKey.isEmpty()) return;
 
-        if (serverKey.equalsIgnoreCase(getStickyServerKey())) {
-            clearStickyServerKey();
-        }
-
         loadFromStash();
         long now = System.currentTimeMillis();
+        boolean foundEntry = false;
         for (ProvenEntry e : entries) {
             if (e.serverKey.equalsIgnoreCase(serverKey)) {
+                foundEntry = true;
                 e.decayFailuresIfNeeded(now);
                 e.consecutiveFailures++;
                 e.lastFailureMs = now;
                 int maxFails = e.getMaxConsecutiveFailures();
                 AppLogger.w(TAG, "⚠️ [MobileProven] Node failed on cellular: " + e.serverKey
                         + " (fail #" + e.consecutiveFailures + "/" + maxFails + ", successCount=" + e.successCount + ")");
+                // Preserve sticky across a single transient hiccup; clear only after 2+ consecutive failures
+                if (e.consecutiveFailures >= 2 && serverKey.equalsIgnoreCase(getStickyServerKey())) {
+                    clearStickyServerKey();
+                }
                 if (e.consecutiveFailures >= maxFails) {
                     AppLogger.w(TAG, "🛑 [MobileProven] Node " + e.serverKey
                             + " temporarily demoted due to " + e.consecutiveFailures + " consecutive cellular failures.");
@@ -323,6 +325,9 @@ public class MobileProvenConfigStorage {
                 persistToStash();
                 break;
             }
+        }
+        if (!foundEntry && serverKey.equalsIgnoreCase(getStickyServerKey())) {
+            clearStickyServerKey();
         }
     }
 
@@ -409,12 +414,40 @@ public class MobileProvenConfigStorage {
                             && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(e.sni)
                             && (now - e.lastSuccessMs <= MAX_AGE_MS)) {
                         e.decayFailuresIfNeeded(now);
-                        if (e.consecutiveFailures == 0 && !e.isCoolingDown(now)) {
+                        if (e.consecutiveFailures < 2 && !e.isCoolingDown(now)) {
                             AppLogger.d(TAG, "⚡ [StickyMobile] Reusing remembered working node: " + e.serverKey);
                             return e.toVpnServer();
                         }
                     }
                     break;
+                }
+            }
+        }
+        return getBestProvenServer();
+    }
+
+    /**
+     * For explicit user-initiated connect on cellular: returns the last used working config
+     * even if a transient cooldown was recorded earlier, falling back to the best proven historical config.
+     */
+    public synchronized VpnServer getStickyOrBestForUserConnect() {
+        loadFromStash();
+        String stickyKey = getStickyServerKey();
+        long now = System.currentTimeMillis();
+        if (stickyKey != null && !stickyKey.isEmpty()) {
+            for (ProvenEntry e : entries) {
+                if (e != null && stickyKey.equalsIgnoreCase(e.serverKey)
+                        && e.host != null && !e.host.isEmpty()
+                        && !MainActivity.isKnownDeadHost(e.host)
+                        && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileHost(e.host)
+                        && !ru.llazyrin.goblinvpn.net.WhitelistPoolManager.isBlockedMobileSni(e.sni)
+                        && (now - e.lastSuccessMs <= MAX_AGE_MS)) {
+                    e.decayFailuresIfNeeded(now);
+                    boolean failedJustNow = (e.consecutiveFailures >= 1 && e.lastFailureMs > 0 && (now - e.lastFailureMs) < 120_000L);
+                    if (e.consecutiveFailures < 3 && !failedJustNow) {
+                        AppLogger.i(TAG, "⚡ [StickyMobile] Restoring previously used working node: " + e.serverKey);
+                        return e.toVpnServer();
+                    }
                 }
             }
         }

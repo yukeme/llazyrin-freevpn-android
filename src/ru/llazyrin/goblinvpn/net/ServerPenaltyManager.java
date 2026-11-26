@@ -209,6 +209,13 @@ public class ServerPenaltyManager {
         }
     }
 
+    public synchronized void clearServerPenalty(String serverKey) {
+        if (serverKey == null || serverKey.trim().isEmpty()) return;
+        String key = getNormalizedKey(serverKey);
+        penaltyExpiryMap.remove(key);
+        failureCountMap.remove(key);
+    }
+
     /**
      * Clears all in-memory penalties (e.g. on manual user pool refresh).
      */

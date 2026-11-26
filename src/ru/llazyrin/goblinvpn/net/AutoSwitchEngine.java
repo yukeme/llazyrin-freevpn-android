@@ -80,7 +80,7 @@ public class AutoSwitchEngine {
     private static final long STANDBY_FRESHNESS_TTL_MS = 180_000L; // 3 minutes max cache validity
     private static final int BATCH_TEST_SIZE = 5;
     public static final int CELLULAR_WAVE_BATCH_SIZE = 5;
-    public static final int CELLULAR_WAVE_TIMEOUT_MS = 2800;
+    public static final int CELLULAR_WAVE_TIMEOUT_MS = 3600;
     public static final int CELLULAR_PRIMARY_WAVE_LIMIT = 20; // 4 waves of 5 servers = 20 candidates
     private static final int MAX_WAVE_SWEEPS_PER_CYCLE = 2;
     private static final long COMMUNITY_REPORT_COOLDOWN_MS = 1_800_000L; // 30 minutes per server
@@ -396,6 +396,16 @@ public class AutoSwitchEngine {
         void onWaveProgress(int waveIndex, int totalWaves, int batchSize);
     }
 
+    public synchronized void clearServerCooldownAndPenalty(String serverKey) {
+        if (serverKey == null || serverKey.trim().isEmpty()) return;
+        failedServerCooldowns.remove(serverKey);
+        serverFailureCounts.remove(serverKey);
+        sessionHandshakeFailedKeys.remove(serverKey.toLowerCase(Locale.ROOT));
+        try {
+            ServerPenaltyManager.getInstance(appContext).clearServerPenalty(serverKey);
+        } catch (Throwable ignored) {}
+    }
+
     public synchronized void notifyUserInitiatedConnect() {
         initialFailoverAttempts.set(0);
         waveSweepsInConnectCycle.set(0);
@@ -615,23 +625,24 @@ public class AutoSwitchEngine {
             return null;
         }
 
-        // Fast parallel TCP preflight (1050ms) across up to 30 top candidates to rank by TCP SYN-ACK RTT
+        // Fast parallel TCP preflight (1050ms) across up to 30 candidates (non-penalized first, filled from pool tail)
         List<VpnServer> preflightSlice = new ArrayList<>();
         Set<String> preflightKeys = new HashSet<>();
         for (VpnServer c : candidates) {
             if (c == null) continue;
             if (!isServerInCooldown(c.getServerKey()) && !ServerPenaltyManager.getInstance(appContext).isPenalized(c.getServerKey())) {
-                preflightSlice.add(c);
-                preflightKeys.add(c.getServerKey().toLowerCase(Locale.ROOT));
-                if (preflightSlice.size() >= 30) break;
+                if (preflightKeys.add(c.getServerKey().toLowerCase(Locale.ROOT))) {
+                    preflightSlice.add(c);
+                    if (preflightSlice.size() >= 30) break;
+                }
             }
         }
-        if (preflightSlice.isEmpty()) {
-            for (int i = 0; i < Math.min(candidates.size(), 30); i++) {
-                VpnServer c = candidates.get(i);
-                if (c != null) {
+        if (preflightSlice.size() < 30) {
+            for (VpnServer c : candidates) {
+                if (c == null) continue;
+                if (preflightKeys.add(c.getServerKey().toLowerCase(Locale.ROOT))) {
                     preflightSlice.add(c);
-                    preflightKeys.add(c.getServerKey().toLowerCase(Locale.ROOT));
+                    if (preflightSlice.size() >= 30) break;
                 }
             }
         }
@@ -642,7 +653,18 @@ public class AutoSwitchEngine {
         }
         AppLogger.i(TAG, "⚡ [TCP Preflight] " + tcpAlive.size() + "/" + preflightSlice.size() + " top candidates reachable in <=1050ms");
 
-        List<VpnServer> effectiveCandidates = new ArrayList<>(tcpAlive);
+        List<VpnServer> tcpHealthy = new ArrayList<>();
+        List<VpnServer> tcpPenalized = new ArrayList<>();
+        for (VpnServer s : tcpAlive) {
+            if (!isServerInCooldown(s.getServerKey()) && !ServerPenaltyManager.getInstance(appContext).isPenalized(s.getServerKey())) {
+                tcpHealthy.add(s);
+            } else {
+                tcpPenalized.add(s);
+            }
+        }
+
+        List<VpnServer> effectiveCandidates = new ArrayList<>(tcpHealthy);
+        effectiveCandidates.addAll(tcpPenalized);
         for (VpnServer c : candidates) {
             if (c != null && !preflightKeys.contains(c.getServerKey().toLowerCase(Locale.ROOT))) {
                 effectiveCandidates.add(c);

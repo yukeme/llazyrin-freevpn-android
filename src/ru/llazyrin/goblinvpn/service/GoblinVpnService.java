@@ -498,8 +498,10 @@ public class GoblinVpnService extends VpnService {
 
         currentServer = server;
         final boolean needWaveResolution = (autoWaveSelect || server == null);
+        waveSelecting = needWaveResolution && autoWaveSelect;
         connectionStageHint = needWaveResolution ? "Волна 1/4…" : null;
         updateState(VpnState.CONNECTING);
+        broadcastStateOnly();
         createNotificationChannel();
 
         String connectingText = needWaveResolution
@@ -654,17 +656,13 @@ public class GoblinVpnService extends VpnService {
                     }
 
                     // =========================================================================
-                    // FAST INITIAL HANDSHAKE WATCHDOG (Adaptive deadline: 5.5s probed / 9.0s cold cellular / 3.5s Wi-Fi)
-                    // Parallelized multi-target in-tunnel verification (Telegram API, GStatic, Cloudflare)
+                    // FAST INITIAL HANDSHAKE WATCHDOG (9.5s cellular / 5.5s Wi-Fi)
+                    // Parallelized multi-target in-tunnel verification with retries inside Xray tunnel
                     // =========================================================================
                     boolean handshakeOk = false;
                     final long watchdogStartMs = SystemClock.elapsedRealtime();
                     final boolean isCellular = WhitelistPoolManager.isRunningOnCellular(GoblinVpnService.this);
-                    final boolean hasHealthyProbe = activeTarget != null
-                            && activeTarget.isAlive()
-                            && activeTarget.getPingMs() > 0
-                            && activeTarget.getPingMs() < 2000;
-                    final long watchdogDeadlineMs = isCellular ? (hasHealthyProbe ? 5500L : 9000L) : 3500L;
+                    final long watchdogDeadlineMs = isCellular ? 9500L : 5500L;
 
                     AppLogger.i(TAG, "Starting Initial Handshake Watchdog (" + watchdogDeadlineMs + "ms deadline, cellular="
                             + isCellular + ") on node " + (activeTarget != null ? activeTarget.getDisplayName() + " [" + activeTarget.getHost() + ":" + activeTarget.getPort()
@@ -676,14 +674,14 @@ public class GoblinVpnService extends VpnService {
 
                     final ExecutorService probeExecutor = Executors.newFixedThreadPool(3);
                     final String[] cellularTargets = new String[]{
-                            ServerPinger.TELEGRAM_API_URL,
                             ServerPinger.HTTP_204_GSTATIC,
-                            ServerPinger.HTTP_204_CLOUDFLARE
+                            ServerPinger.HTTP_204_CLOUDFLARE,
+                            ServerPinger.TELEGRAM_API_URL
                     };
                     final String[] wifiTargets = new String[]{
                             ServerPinger.HTTP_204_GSTATIC,
-                            ServerPinger.TELEGRAM_API_URL,
-                            ServerPinger.HTTP_204_CLOUDFLARE
+                            ServerPinger.HTTP_204_CLOUDFLARE,
+                            ServerPinger.TELEGRAM_API_URL
                     };
                     final String[] targets = isCellular ? cellularTargets : wifiTargets;
 
@@ -691,18 +689,45 @@ public class GoblinVpnService extends VpnService {
                         probeExecutor.execute(new Runnable() {
                             @Override
                             public void run() {
-                                if (!isRunning || activeSessionId.get() != session) {
+                                try {
+                                    // Brief warm-up so Xray startLoop() finishes initializing outbound handlers
+                                    Thread.sleep(200);
+                                } catch (InterruptedException ie) {
                                     return;
                                 }
-                                int d = measureActiveTunnelDelay(targetUrl);
-                                if (d > 0) {
-                                    AppLogger.i(TAG, "🔍 In-tunnel probe OK (" + targetUrl + "): " + d + "ms");
-                                    globalEgressConfirmed.set(true);
-                                    if (probeConfirmed.compareAndSet(false, true)) {
-                                        probeDelay.set(d);
+                                int attemptProbe = 0;
+                                while (isRunning
+                                        && activeSessionId.get() == session
+                                        && !probeConfirmed.get()
+                                        && !Thread.currentThread().isInterrupted()) {
+                                    long remaining = watchdogDeadlineMs - (SystemClock.elapsedRealtime() - watchdogStartMs);
+                                    if (remaining < 450L) {
+                                        break;
                                     }
-                                } else {
-                                    AppLogger.d(TAG, "🔍 In-tunnel probe FAILED (" + targetUrl + ")");
+                                    attemptProbe++;
+                                    int d = measureActiveTunnelDelay(targetUrl);
+                                    if (!isRunning || activeSessionId.get() != session) {
+                                        return;
+                                    }
+                                    if (d > 0) {
+                                        AppLogger.i(TAG, "🔍 In-tunnel probe OK (" + targetUrl + "): " + d + "ms");
+                                        globalEgressConfirmed.set(true);
+                                        if (probeConfirmed.compareAndSet(false, true)) {
+                                            probeDelay.set(d);
+                                        }
+                                        return;
+                                    }
+                                    if (attemptProbe == 1) {
+                                        AppLogger.d(TAG, "🔍 In-tunnel probe FAILED (" + targetUrl + "), retrying...");
+                                    }
+                                    if (attemptProbe >= 4 || (watchdogDeadlineMs - (SystemClock.elapsedRealtime() - watchdogStartMs)) < 700L) {
+                                        break;
+                                    }
+                                    try {
+                                        Thread.sleep(450);
+                                    } catch (InterruptedException ie) {
+                                        return;
+                                    }
                                 }
                             }
                         });
@@ -729,6 +754,10 @@ public class GoblinVpnService extends VpnService {
                             break;
                         }
                     }
+
+                    try {
+                        probeExecutor.shutdownNow();
+                    } catch (Throwable ignored) {}
 
                     if (activeSessionId.get() != session || !isRunning) {
                         return;

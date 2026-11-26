@@ -272,6 +272,7 @@ public class MainActivity extends Activity {
     private List<VpnServer> serverList = new ArrayList<>();
     private VpnServer selectedServer = null; // null means AUTO
     private VpnState currentState = VpnState.DISCONNECTED;
+    private boolean pendingWaveSelectUi = false;
     private boolean isWaveAnimating = false;
     private boolean isConnectingPulseAnimating = false;
     private boolean isActivityPaused = false;
@@ -306,6 +307,14 @@ public class MainActivity extends Activity {
                 if (stateName != null) {
                     try {
                         currentState = VpnState.valueOf(stateName);
+                        if (currentState != VpnState.CONNECTING) {
+                            pendingWaveSelectUi = false;
+                        } else if (!GoblinVpnService.isWaveSelecting()) {
+                            String hint = GoblinVpnService.getConnectionStageHint();
+                            if ((hint == null || !hint.contains("Волна")) && GoblinVpnService.getCurrentServer() != null) {
+                                pendingWaveSelectUi = false;
+                            }
+                        }
                         updateUi();
                     } catch (Exception ignored) {}
                 }
@@ -2320,24 +2329,30 @@ public class MainActivity extends Activity {
             } catch (Throwable ignored) {}
             if (preVerified == null) {
                 try {
-                    VpnServer sticky = MobileProvenConfigStorage.getInstance(this).getStickyMobileServer();
-                    if (sticky != null
-                            && !AutoSwitchEngine.getInstance(this).isServerInCooldown(sticky.getServerKey())
-                            && !ServerPenaltyManager.getInstance(this).isPenalized(sticky.getServerKey())) {
+                    VpnServer sticky = MobileProvenConfigStorage.getInstance(this).getStickyOrBestForUserConnect();
+                    if (sticky != null) {
                         preVerified = sticky;
+                        AutoSwitchEngine.getInstance(this).clearServerCooldownAndPenalty(sticky.getServerKey());
                         AppLogger.i("MainActivity", "⚡ [StickyMobile] Connecting directly to remembered cellular node: "
                                 + sticky.getDisplayName() + " [" + sticky.getServerKey() + "] (no re-probe needed)");
                     }
                 } catch (Throwable ignored) {}
             }
             if (preVerified != null) {
+                pendingWaveSelectUi = false;
                 startIntent.putExtra(GoblinVpnService.EXTRA_SERVER, preVerified);
             } else {
+                pendingWaveSelectUi = true;
                 startIntent.putExtra(GoblinVpnService.EXTRA_AUTO_WAVE_SELECT, true);
             }
         } else {
+            pendingWaveSelectUi = false;
             VpnServer target = getTargetServer();
             startIntent.putExtra(GoblinVpnService.EXTRA_SERVER, target);
+        }
+
+        if (currentState == VpnState.CONNECTING) {
+            updateUi();
         }
 
         if (prefs.isRestrictedTelegramOnly()) {
@@ -2705,6 +2720,9 @@ public class MainActivity extends Activity {
             try {
                 MobileProvenConfigStorage.getInstance(this).clearStickyServerKey();
             } catch (Throwable ignored) {}
+            pendingWaveSelectUi = true;
+            currentState = VpnState.CONNECTING;
+            updateUi();
             Toast.makeText(this, "⚡ Подбор лучшего мобильного узла…", Toast.LENGTH_SHORT).show();
             NetworkPreferences prefs = NetworkPreferences.getInstance(this);
             Intent startIntent = new Intent(this, GoblinVpnService.class);
@@ -2724,6 +2742,7 @@ public class MainActivity extends Activity {
     private void switchServerAndReconnect(VpnServer newServer) {
         if (newServer == null) return;
         if (currentState == VpnState.CONNECTED || currentState == VpnState.CONNECTING) {
+            pendingWaveSelectUi = false;
             Toast.makeText(this, "Переподключение к " + newServer.getDisplayName() + "…", Toast.LENGTH_SHORT).show();
             NetworkPreferences prefs = NetworkPreferences.getInstance(this);
             Intent startIntent = new Intent(this, GoblinVpnService.class);
@@ -3128,6 +3147,7 @@ public class MainActivity extends Activity {
     private void updateUi() {
         switch (currentState) {
             case CONNECTED:
+                pendingWaveSelectUi = false;
                 animatePowerButtonColor(Color.parseColor("#10B981"));
                 viewPowerBezel.setBackgroundResource(R.drawable.bg_m3_inner_bezel);
                 viewPowerGlow.setAlpha(1.0f);
@@ -3135,6 +3155,10 @@ public class MainActivity extends Activity {
                 ivPowerIcon.setColorFilter(Color.parseColor("#FFFFFF"));
                 tvPowerStatus.setVisibility(View.VISIBLE);
                 tvPowerStatus.setText("ВКЛЮЧЕН");
+                tvPowerStatus.setTextSize(10.5f);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    tvPowerStatus.setLetterSpacing(0.12f);
+                }
                 tvPowerStatus.setTextColor(Color.parseColor("#FFFFFF"));
 
                 if (starfieldView != null) {
@@ -3168,7 +3192,25 @@ public class MainActivity extends Activity {
                 ivPowerIcon.setImageResource(R.drawable.ic_power_icon);
                 ivPowerIcon.setColorFilter(Color.parseColor("#E3B341"));
                 tvPowerStatus.setVisibility(View.VISIBLE);
-                tvPowerStatus.setText("Подключение");
+                {
+                    String hintNow = GoblinVpnService.getConnectionStageHint();
+                    boolean isPickingConfig = pendingWaveSelectUi
+                            || GoblinVpnService.isWaveSelecting()
+                            || (hintNow != null && hintNow.contains("Волна"));
+                    if (isPickingConfig) {
+                        tvPowerStatus.setText("Подбираю конфиг");
+                        tvPowerStatus.setTextSize(9.5f);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            tvPowerStatus.setLetterSpacing(0.02f);
+                        }
+                    } else {
+                        tvPowerStatus.setText("Подключение");
+                        tvPowerStatus.setTextSize(10.5f);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            tvPowerStatus.setLetterSpacing(0.12f);
+                        }
+                    }
+                }
                 tvPowerStatus.setTextColor(Color.parseColor("#E3B341"));
 
                 if (starfieldView != null) {
@@ -3209,12 +3251,17 @@ public class MainActivity extends Activity {
             case ERROR:
             case DISCONNECTED:
             default:
+                pendingWaveSelectUi = false;
                 animatePowerButtonColor(Color.parseColor("#1E2922"));
                 viewPowerBezel.setBackgroundResource(R.drawable.bg_ref_power_outer_off);
                 viewPowerGlow.setAlpha(0.12f);
                 ivPowerIcon.setImageResource(R.drawable.ic_power_icon);
                 ivPowerIcon.setColorFilter(Color.parseColor("#758678"));
                 tvPowerStatus.setVisibility(View.GONE);
+                tvPowerStatus.setTextSize(10.5f);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    tvPowerStatus.setLetterSpacing(0.12f);
+                }
                 updateSecurityStatusPill(VpnState.DISCONNECTED, null);
 
                 if (starfieldView != null) {

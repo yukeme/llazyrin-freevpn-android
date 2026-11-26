@@ -573,7 +573,7 @@ public class ServerPinger {
 
         // 0. Instant Socket Preflight: if raw TCP socket is blocked/unreachable, fail fast
         if (!skipTcpPreflight) {
-            int preflightCapMs = (int) Math.min(1000L, overallBudgetMs);
+            int preflightCapMs = (int) Math.min(700L, overallBudgetMs);
             if (!pingSocketDirectFast(server.getHost(), server.getPort(), preflightCapMs)) {
                 server.setAlive(false);
                 server.setPingMs(-1);
@@ -582,17 +582,19 @@ public class ServerPinger {
         }
 
         long elapsedPreflightMs = (System.nanoTime() / 1_000_000L) - startMs;
-        long probeWaitMs = Math.max(600L, overallBudgetMs - elapsedPreflightMs);
+        long probeWaitMs = Math.max(800L, overallBudgetMs - elapsedPreflightMs);
 
         // 1. Lightweight HTTP 204 egress probes via encrypted Xray outbound
         try {
             final String configJson = XrayConfigGenerator.generateBenchmarkConfig(server);
             if (configJson != null && !configJson.trim().isEmpty()) {
-                int res = runSingleLibv2rayProbe(configJson, HTTP_204_GSTATIC, server.getHost(), probeWaitMs);
+                long primaryWaitMs = Math.max(1800L, (probeWaitMs * 72L) / 100L);
+                if (primaryWaitMs > probeWaitMs) primaryWaitMs = probeWaitMs;
+                int res = runSingleLibv2rayProbe(configJson, HTTP_204_GSTATIC, server.getHost(), primaryWaitMs);
                 if (res <= 0) {
                     long elapsedNowMs = (System.nanoTime() / 1_000_000L) - startMs;
                     long remainingMs = overallBudgetMs - elapsedNowMs;
-                    if (remainingMs >= 400L) {
+                    if (remainingMs >= 500L) {
                         res = runSingleLibv2rayProbe(configJson, HTTP_204_CLOUDFLARE, server.getHost(), remainingMs);
                     }
                 }
